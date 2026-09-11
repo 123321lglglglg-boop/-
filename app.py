@@ -3,7 +3,6 @@
 启动:
     python run_demo.py
 """
-import os
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -22,24 +21,9 @@ from src.theme import inject_liquid_theme
 from src.pwa import inject_pwa, inject_mobile_css
 from src.hero import hero_html
 from src.map_viz import drilldown_map_html
+from src.config import neo4j_config
 import altair as alt
 
-def _cfg(key: str, default: str = "") -> str:
-    """读取配置:环境变量 > Streamlit secrets > 默认值(本地开发)。"""
-    v = os.environ.get(key, "").strip()
-    if not v:
-        try:
-            v = str(st.secrets.get(key, "")).strip()
-        except Exception:
-            pass
-    return v or default
-
-
-NEO4J_URI = _cfg("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_AUTH = (
-    _cfg("NEO4J_USER", "neo4j"),
-    _cfg("NEO4J_PASSWORD", "wlcb123456"),
-)
 BASE = Path(__file__).resolve().parent
 
 st.set_page_config(page_title="乌兰察布知识图谱", page_icon="🗺️", layout="wide")
@@ -77,7 +61,8 @@ def _gradient_bar(rows, cat_field, val_field, title, horizontal=False):
 
 @st.cache_resource
 def get_driver():
-    return GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
+    uri, auth = neo4j_config()
+    return GraphDatabase.driver(uri, auth=auth)
 
 
 def run_cypher(query: str, **params):

@@ -23,8 +23,7 @@ from neo4j import GraphDatabase
 BASE = Path(__file__).resolve().parent.parent
 KEY_FILE = BASE / "deepseek_key.txt"
 
-NEO4J_URI = "bolt://localhost:7687"
-NEO4J_AUTH = ("neo4j", "wlcb123456")
+from src.config import neo4j_config
 
 API_URL = "https://api.deepseek.com/chat/completions"
 MODEL = "deepseek-chat"
@@ -173,7 +172,8 @@ def is_readonly(cypher: str) -> bool:
 
 
 def run_cypher(cypher: str):
-    d = GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
+    uri, auth = neo4j_config()
+    d = GraphDatabase.driver(uri, auth=auth)
     try:
         with d.session() as s:
             return [dict(r) for r in s.run(cypher)]

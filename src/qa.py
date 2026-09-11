@@ -20,8 +20,7 @@ warnings.filterwarnings("ignore")
 
 from neo4j import GraphDatabase
 
-NEO4J_URI = "bolt://localhost:7687"
-NEO4J_AUTH = ("neo4j", "wlcb123456")
+from src.config import neo4j_config
 
 # ---- 词典:把口语映射到图谱里的真实名称 ----
 
@@ -244,7 +243,8 @@ def answer(question: str) -> str:
     else:
         q, params = build_query(plan)
 
-    d = GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
+    uri, auth = neo4j_config()
+    d = GraphDatabase.driver(uri, auth=auth)
     with d.session() as s:
         records = [dict(r) for r in s.run(q, **params)]
     d.close()

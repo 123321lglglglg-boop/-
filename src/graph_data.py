@@ -5,12 +5,12 @@ warnings.filterwarnings("ignore")
 
 from neo4j import GraphDatabase
 
-NEO4J_URI = "bolt://localhost:7687"
-NEO4J_AUTH = ("neo4j", "wlcb123456")
+from src.config import neo4j_config
 
 
 def _driver():
-    return GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
+    uri, auth = neo4j_config()
+    return GraphDatabase.driver(uri, auth=auth)
 
 
 def _run(query, **params):
