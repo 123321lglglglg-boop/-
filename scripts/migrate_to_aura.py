@@ -3,10 +3,9 @@
 比粘贴 Cypher 文件更可靠:直接驱动对驱动,批量复制。
 
 用法:
-    1. 注册 https://neo4j.com/cloud/aura-free/ 创建免费实例
-    2. 拿到连接串(形如 neo4j+s://xxxx.databases.neo4j.io)和密码
-    3. 运行:
-       python scripts/migrate_to_aura.py "neo4j+s://xxxx.databases.neo4j.io" "密码"
+    python scripts/migrate_to_aura.py "neo4j+s://xxxx.databases.neo4j.io" "Aura用户名" "Aura密码"
+
+注意:Aura 免费实例的用户名是**实例 ID**(如 fd355fed),不是默认的 neo4j。
 """
 import sys
 import time
@@ -38,11 +37,12 @@ def main():
         print(__doc__)
         sys.exit(1)
     aura_uri, aura_password = sys.argv[1], sys.argv[2]
+    aura_user = sys.argv[3] if len(sys.argv) > 3 else "neo4j"
 
     print(f"源: {LOCAL_URI}")
-    print(f"目标: {aura_uri}")
+    print(f"目标: {aura_uri} (用户: {aura_user})")
     src = GraphDatabase.driver(LOCAL_URI, auth=LOCAL_AUTH)
-    dst = GraphDatabase.driver(aura_uri, auth=("neo4j", aura_password))
+    dst = GraphDatabase.driver(aura_uri, auth=(aura_user, aura_password))
 
     # 先验证云连接
     dst.verify_connectivity()
@@ -66,7 +66,9 @@ def main():
                 continue
             for i in range(0, len(rows), BATCH):
                 ds.run(
-                    f"UNWIND $rows AS row MERGE (n:{label}) SET n = row",
+                    f"UNWIND $rows AS row "
+                    f"MERGE (n:{label} {{{key}: row.{key}}}) "
+                    f"SET n = row",
                     rows=rows[i:i + BATCH],
                 )
             total_nodes += len(rows)
@@ -78,19 +80,24 @@ def main():
     from collections import defaultdict
     with src.session() as ss, dst.session() as ds:
         for label, key in LABEL_KEY.items():
-            rels = [dict(r) for r in ss.run(
-                f"MATCH (a:{label})-[r]->(b) "
-                f"RETURN a.{key} AS ak, b.{key} AS bk, type(r) AS t, "
-                f"labels(b)[0] AS bl, properties(r) AS rp"
-            )]
+            # 逐条关系按目标标签取对应键(不同标签键名不同)
+            rels = []
+            for b_label, b_key in LABEL_KEY.items():
+                rows = [dict(r) for r in ss.run(
+                    f"MATCH (a:{label})-[r]->(b:{b_label}) "
+                    f"RETURN a.{key} AS ak, b.{b_key} AS bk, type(r) AS t, "
+                    f"properties(r) AS rp"
+                )]
+                for r in rows:
+                    r["bl"] = b_label
+                    rels.append(r)
             if not rels:
                 continue
-            # 按 (关系类型, 目标标签) 分组,每组一条写语句
             groups = defaultdict(list)
             for r in rels:
                 groups[(r["t"], r["bl"])].append(r)
             for (rtype, blabel), items in groups.items():
-                bkey = LABEL_KEY.get(blabel, "name")
+                bkey = LABEL_KEY[blabel]
                 q = (
                     f"UNWIND $rows AS row "
                     f"MATCH (a:{label} {{{key}: row.ak}}) "

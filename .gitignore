@@ -1,6 +1,7 @@
 # 密钥(绝不提交)
 amap_key.txt
 deepseek_key.txt
+aura_creds.txt
 .streamlit/secrets.toml
 .streamlit/secrets.toml.example
 
