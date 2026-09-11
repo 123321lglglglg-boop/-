@@ -1,0 +1,19 @@
+# 密钥(绝不提交)
+amap_key.txt
+deepseek_key.txt
+.streamlit/secrets.toml
+.streamlit/secrets.toml.example
+
+# IDE / 缓存
+.idea/
+__pycache__/
+*.pyc
+
+# 运行日志
+data/streamlit.log
+data/demo_test.log
+
+# 大数据文件(部署时本地已有;如需上云用导出脚本重新生成)
+data/raw/
+data/export/
+data/processed/pois_clean.json
