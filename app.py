@@ -15,6 +15,7 @@ from neo4j import GraphDatabase
 
 from src.qa import answer, parse
 from src.llm_qa import ask
+from src.chat_page import render_chat_page
 from src.graph_data import overview_subgraph, poi_neighborhood
 from src.viz import graph_html
 from src.theme import inject_liquid_theme
@@ -111,26 +112,29 @@ def session_client_id() -> str:
 
 
 def main():
-    # ---- 首屏 Hero ----
+    # ---- 首屏:对话式搜索(核心功能,一打开就能用)----
+    render_chat_page()
+
+    st.divider()
+
+    # ---- 深入探索:图谱的多维视图 ----
+    st.markdown(
+        "<div style='text-align:center;color:#8fa3bf;font-size:13px;"
+        "letter-spacing:1px;margin:4px 0 14px'>"
+        "↓ 深入探索这张图谱 ↓</div>",
+        unsafe_allow_html=True,
+    )
+
     stats_raw = {
         "poi": run_cypher("MATCH (p:POI) RETURN count(p) AS n")[0]["n"],
         "relations": run_cypher("MATCH ()-[r]->() RETURN count(r) AS n")[0]["n"],
         "brands": run_cypher("MATCH (c:Chain) RETURN count(c) AS n")[0]["n"],
         "districts": run_cypher("MATCH (d:District) RETURN count(d) AS n")[0]["n"],
     }
-    st.iframe(hero_html(stats_raw, height=350), height=360)
 
-    st.markdown(
-        "<div style='text-align:center;color:#8fa3bf;font-size:13.5px;"
-        "letter-spacing:0.5px;margin:6px 0 18px'>"
-        "数据来源:高德开放平台 Web API · 存储:Neo4j 图数据库 · 问答:规则解析 + DeepSeek LLM"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
         ["📊 图谱总览", "🗺️ 地图分布", "🕸️ 图谱探索",
-         "🔍 商家查询", "💬 规则问答", "🤖 LLM 问答"]
+         "🔍 商家查询", "🎬 项目介绍"]
     )
 
     # ---- Tab 1: 总览 ----
@@ -255,88 +259,60 @@ def main():
                 st.success(f"找到 {len(df)} 家")
                 st.dataframe(df, use_container_width=True, hide_index=True)
 
-    # ---- Tab 4: 问答 ----
+    # ---- Tab 5: 项目介绍 ----
     with tab5:
-        st.markdown("**试试这些问题:**")
-        examples = [
-            "集宁区人均50以下的餐厅有哪些",
-            "评分最高的蒙餐馆在哪",
-            "四子王旗有什么景点",
-            "肯德基在乌兰察布有几家店",
-            "哪个区县餐厅最多",
-        ]
-        cols = st.columns(len(examples))
-        for i, (col, ex) in enumerate(zip(cols, examples)):
-            if col.button(ex, key=f"ex{i}", use_container_width=True):
-                st.session_state["question"] = ex
+        st.iframe(hero_html(stats_raw, height=300), height=310)
 
-        question = st.text_input("输入你的问题", value=st.session_state.get("question", ""),
-                                 placeholder="例如:集宁区人均50以下的餐厅有哪些")
-        if st.button("提问", type="primary") and question.strip():
-            with st.spinner("查询知识图谱…"):
-                plan = parse(question)
-                result = answer(question)
-            st.markdown("### 回答")
-            st.text(result)
-            with st.expander("查看解析逻辑(面试加分项)"):
-                st.markdown("**1. 自然语言 → 结构化条件**")
-                st.json({k: v for k, v in plan.items() if v not in (None, False)})
-                st.caption(
-                    "规则解析器把口语映射到图谱本体:区县别名、品类口语词、"
-                    "价格/评分条件、计数/分布/排序意图;再由 build_query 组装 Cypher。"
-                )
-
-    # ---- Tab 5: LLM 问答 ----
-    with tab6:
+        st.subheader("技术架构")
         st.markdown(
-            "**LLM 增强问答** — 大模型把自然语言转成 Cypher 查询图谱,"
-            "再把结果总结成自然语言回答。相比规则版,能理解更灵活的问法。"
+            """
+```
+高德开放平台 API  →  数据清洗/实体对齐  →  图谱增强  →  Neo4j(云)
+   6,949 个商家      连锁识别·重名消歧      商圈聚类·地理邻近      7,507 节点
+                         ↓                                         53,700 关系
+                  Streamlit + ECharts  ←  对话式问答(DeepSeek Text2Cypher)
+```
+"""
         )
-        st.caption("底层模型:DeepSeek · 只读查询校验 · 出错自动重试")
 
-        llm_examples = [
-            "离乌兰图雅蒙餐最近的商家有哪些",
-            "推荐几家集宁区评分高的火锅店,说说理由",
-            "肯德基在乌兰察布的门店都分布在哪些区",
-            "四子王旗有什么值得去的景点",
-        ]
-        cols = st.columns(len(llm_examples))
-        for i, (col, ex) in enumerate(zip(cols, llm_examples)):
-            if col.button(ex, key=f"lex{i}", use_container_width=True):
-                st.session_state["llm_question"] = ex
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown("**数据与图谱**")
+            st.markdown(
+                f"""
+- 采集 **{stats_raw['poi']:,}** 个真实商家(高德 Web API)
+- **{stats_raw['relations']:,}** 条关系、**11** 种关系类型
+- **78** 个商圈(坐标聚类 + 地址地标命名)
+- **14,650** 条邻近关系(真实地理距离 < 300m)
+- **{stats_raw['brands']}** 个连锁品牌实体对齐
+"""
+            )
+        with col_b:
+            st.markdown("**问答与技术亮点**")
+            st.markdown(
+                """
+- **双引擎问答**:规则解析 + LLM Text2Cypher
+- **多轮对话**:理解「那评分高的呢」这类追问
+- **只读校验**:拦截 LLM 生成的写操作,保护数据
+- **错误自愈**:Cypher 执行失败自动回传重试
+- **流式输出**:打字机效果逐字返回
+- **限流保护**:防公网 API key 被刷
+"""
+            )
 
-        llm_q = st.text_input("输入你的问题", value=st.session_state.get("llm_question", ""),
-                              placeholder="例如:离最近的火锅店有哪些好吃的",
-                              key="llm_input")
-        if st.button("LLM 提问", type="primary") and llm_q.strip():
-            with st.spinner("大模型正在生成查询并分析结果…"):
-                try:
-                    llm_result = ask(llm_q, client_id=session_client_id())
-                except Exception as e:
-                    llm_result = {"ok": False, "cypher": "", "records": [],
-                                  "answer": f"调用失败:{e}"}
-
-            st.markdown("### 回答")
-            if llm_result["ok"]:
-                st.success(llm_result["answer"])
-            else:
-                st.error(llm_result["answer"])
-
-            with st.expander("查看技术细节(面试加分项)"):
-                st.markdown("**1. 大模型生成的 Cypher**")
-                st.code(llm_result["cypher"] or "(未生成)", language="cypher")
-                st.markdown(f"**2. 图谱返回 {len(llm_result['records'])} 条结果**")
-                if llm_result["records"]:
-                    st.dataframe(pd.DataFrame(llm_result["records"]).head(10),
-                                 use_container_width=True, hide_index=True)
-                st.caption(
-                    "流程:自然语言 → LLM 生成 Cypher(带本体 schema 提示)→ "
-                    "只读语句校验 → Neo4j 执行(报错自动回传重试)→ "
-                    "LLM 根据查询结果生成自然语言回答"
-                )
+        st.subheader("数据来源与说明")
+        st.caption(
+            "数据来自高德开放平台 Web 服务 API(个人学习用途)· "
+            "地图边界来自 DataV.GeoAtlas · "
+            "图数据库为 Neo4j Aura 免费实例 · LLM 为 DeepSeek API"
+        )
+        st.caption(
+            "本项目为求职作品集,展示数据采集 → 图谱构建 → 可视化 → "
+            "自然语言问答的完整链路。"
+        )
 
     st.divider()
-    st.caption("知识图谱作品集 | 采集 → 清洗 → 实体对齐 → 图谱增强 → Neo4j → 可视化问答")
+    st.caption("知识图谱作品集 | 采集 → 清洗 → 实体对齐 → 图谱增强 → Neo4j → 对话式问答")
 
 
 if __name__ == "__main__":

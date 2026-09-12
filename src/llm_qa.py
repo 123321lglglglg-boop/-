@@ -91,6 +91,44 @@ FORBIDDEN = re.compile(
 )
 CYPHER_BLOCK = re.compile(r"```(?:cypher)?\s*(.*?)```", re.S | re.IGNORECASE)
 
+# 多轮对话:把历史转成上下文,让"那评分高的呢"这类追问能被理解
+CONTEXT_PROMPT = """下面是用户之前的对话。如果当前问题是追问(比如"那XX呢"、"还有吗"、
+"换成XX"),请结合上下文补全意图再生成 Cypher;如果是全新问题,忽略历史即可。
+
+历史对话(用户问 → 你生成的查询要点):
+{history}
+
+当前问题:{question}"""
+
+
+def format_history(history: list, max_turns: int = 4) -> str:
+    """把对话历史整理成 LLM 可读的上下文。
+
+    history: [{"q": 用户问题, "cypher": 上次生成的查询, "answer": 上次回答}, ...]
+    """
+    if not history:
+        return "(无)"
+    lines = []
+    for h in history[-max_turns:]:
+        lines.append(f"- 用户:{h['q']}")
+        if h.get("cypher"):
+            lines.append(f"  上次查询:{h['cypher']}")
+        if h.get("answer"):
+            ans = h["answer"].replace("\n", " ")[:120]
+            lines.append(f"  上次回答:{ans}")
+    return "\n".join(lines)
+
+
+def make_messages(question: str, history: list = None) -> list:
+    """构造发送给 LLM 的消息(含多轮上下文)。"""
+    msgs = [{"role": "system", "content": TEXT2CYPHER_PROMPT}]
+    if history:
+        ctx = CONTEXT_PROMPT.format(history=format_history(history), question=question)
+        msgs.append({"role": "user", "content": ctx})
+    else:
+        msgs.append({"role": "user", "content": question})
+    return msgs
+
 # ---- 公网部署限流:防止 API key 被刷 ----
 _RATE = {"window_start": 0.0, "count": 0}
 RATE_LIMIT_PER_MIN = 8      # 每 IP 每分钟
@@ -155,6 +193,35 @@ def call_llm(messages: list, temperature: float = 0.1, max_tokens: int = 800) ->
     return r.json()["choices"][0]["message"]["content"].strip()
 
 
+def call_llm_stream(messages: list, temperature: float = 0.1, max_tokens: int = 800):
+    """流式调用,逐块 yield 文本(用于打字机效果)。"""
+    key = get_api_key()
+    if not key:
+        raise RuntimeError("未配置 DeepSeek key(deepseek_key.txt 或 DEEPSEEK_API_KEY)")
+    r = requests.post(
+        API_URL,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json={"model": MODEL, "messages": messages, "stream": True,
+              "temperature": temperature, "max_tokens": max_tokens},
+        timeout=90,
+        stream=True,
+    )
+    r.raise_for_status()
+    for line in r.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data: "):
+            continue
+        payload = line[6:]
+        if payload.strip() == "[DONE]":
+            break
+        try:
+            delta = json.loads(payload)["choices"][0].get("delta", {})
+            chunk = delta.get("content")
+            if chunk:
+                yield chunk
+        except (ValueError, KeyError, IndexError):
+            continue
+
+
 def clean_cypher(text: str) -> str:
     m = CYPHER_BLOCK.search(text)
     if m:
@@ -181,12 +248,12 @@ def run_cypher(cypher: str):
         d.close()
 
 
-def text2cypher(question: str, max_retry: int = 2) -> tuple:
-    """自然语言 → Cypher,失败时带错误信息重试。返回 (cypher, records, error)。"""
-    messages = [
-        {"role": "system", "content": TEXT2CYPHER_PROMPT},
-        {"role": "user", "content": question},
-    ]
+def text2cypher(question: str, max_retry: int = 2, history: list = None) -> tuple:
+    """自然语言 → Cypher,失败时带错误信息重试。返回 (cypher, records, error)。
+
+    history: 多轮对话历史,用于理解追问。
+    """
+    messages = make_messages(question, history)
     last_err = None
     for attempt in range(max_retry + 1):
         cypher = clean_cypher(call_llm(messages))
@@ -209,29 +276,39 @@ def text2cypher(question: str, max_retry: int = 2) -> tuple:
     return "", [], last_err
 
 
-def generate_answer(question: str, records: list) -> str:
+def generate_answer(question: str, records: list, history: list = None) -> str:
     if not records:
         data_txt = "(查询结果为空)"
     else:
         sample = records[:20]
         data_txt = json.dumps(sample, ensure_ascii=False, default=str, indent=1)
+
+    user_content = f"用户问题:{question}\n\n查询结果({len(records)} 条,最多展示 20 条):\n{data_txt}"
+    if history:
+        # 让回答也能呼应上一轮(如"那这些里评分最高的是?")
+        user_content = (
+            f"上一轮对话(供参考):{format_history(history, 2)}\n\n{user_content}"
+        )
     return call_llm([
         {"role": "system", "content": ANSWER_PROMPT},
-        {"role": "user", "content": f"用户问题:{question}\n\n查询结果({len(records)} 条,最多展示 20 条):\n{data_txt}"},
+        {"role": "user", "content": user_content},
     ])
 
 
-def ask(question: str, client_id: str = "anon") -> dict:
-    """完整流程:问题 → Cypher → 查询 → 自然语言答案。"""
+def ask(question: str, client_id: str = "anon", history: list = None) -> dict:
+    """完整流程:问题 → Cypher → 查询 → 自然语言答案。
+
+    history: 多轮对话历史 [{q, cypher, answer}, ...],用于理解追问。
+    """
     try:
         check_rate_limit(client_id)
     except RateLimited as e:
         return {"ok": False, "cypher": "", "records": [], "answer": str(e)}
 
-    cypher, records, err = text2cypher(question)
+    cypher, records, err = text2cypher(question, history=history)
     if err:
         return {"ok": False, "cypher": cypher, "records": [], "answer": f"查询失败:{err}"}
-    answer_txt = generate_answer(question, records)
+    answer_txt = generate_answer(question, records, history=history)
     return {"ok": True, "cypher": cypher, "records": records, "answer": answer_txt}
 
 
