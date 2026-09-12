@@ -29,7 +29,7 @@ from src.source_viz import render_sources_html
 from src.multi_query import is_vague, multi_query_answer
 from src.multi_viz import render_multi_html
 from src.feedback import save_feedback
-from src.hybrid_retrieval import classify
+from src.hybrid_retrieval import classify, classify_with_context, is_followup
 from src.vector_search import index_ready, semantic_search
 from src.route_viz import render_route_html
 
@@ -76,14 +76,20 @@ def render_examples():
 
 
 def history_for_llm(max_turns: int = 4) -> list:
-    """把对话历史转成 LLM 可用的上下文(只取问答对)。"""
+    """把对话历史转成 LLM 可用的上下文(只取问答对)。
+
+    带上 route 字段:追问分流时需要继承上一轮的检索意图。
+    """
     hist = []
     for m in st.session_state.chat:
         if m["role"] == "user":
-            hist.append({"q": m["content"], "cypher": "", "answer": ""})
+            hist.append({"q": m["content"], "cypher": "", "answer": "", "route": ""})
         elif m["role"] == "assistant" and hist:
             hist[-1]["cypher"] = m.get("cypher", "")
             hist[-1]["answer"] = m.get("content", "")
+            # route 存在 assistant 消息里,回溯给对应的问句
+            ri = m.get("route_info") or {}
+            hist[-1]["route"] = ri.get("route", "")
     return hist[-max_turns:]
 
 
@@ -115,7 +121,19 @@ def _answer_with_stream(question: str, history: list):
       3. 走 Multi-Query:图谱和向量都难以覆盖的宽泛场景问题
     """
     multi_info = None
-    route = classify(question)
+    # 带上下文分流:追问("那评分高的呢")要继承上一轮的检索意图
+    route = classify_with_context(question, history)
+
+    # 追问时把上下文拼进检索语句,让向量检索也能理解"那些店"指什么
+    search_query = question
+    if is_followup(question) and history:
+        last_q = ""
+        for h in reversed(history):
+            if h.get("q"):
+                last_q = h["q"]
+                break
+        if last_q:
+            search_query = f"{last_q} {question}"
 
     # ---- 先做 GraphRAG 双引擎检索 ----
     route_info = {"route": route, "kg_count": 0, "vec_count": 0}
@@ -125,14 +143,14 @@ def _answer_with_stream(question: str, history: list):
     if vector_mode and index_ready():
         with st.spinner("正在做语义检索…"):
             try:
-                vec_results = semantic_search(question, top_k=10)
+                vec_results = semantic_search(search_query, top_k=10)
             except Exception:
                 vec_results = []
         route_info["vec_count"] = len(vec_results)
 
     # ---- 宽泛场景问题:两路都覆盖不了时,才用 Multi-Query 多角度召回 ----
-    # 判断:问题宽泛 + 语义信号不明确(纯场景/时间类,如"晚上有什么玩的")
-    if is_vague(question) and route == "structured" and not vec_results:
+    # 追问不走 Multi-Query(追问是收窄范围,不是发散)
+    if is_vague(question) and not is_followup(question) and route == "structured" and not vec_results:
         with st.spinner("正在从多个角度检索…"):
             mq = multi_query_answer(question)
         if mq.get("ok") and mq.get("records"):
@@ -195,6 +213,17 @@ def _answer_with_stream(question: str, history: list):
         data_txt = _json.dumps(records[:20], ensure_ascii=False, default=str, indent=1) \
             if records else "(查询结果为空)"
 
+        # 追问时把上文也提供给 LLM,让答案能呼应("这些店里XX最好")
+        ctx = ""
+        if is_followup(question) and history:
+            last_q = ""
+            for h in reversed(history):
+                if h.get("q"):
+                    last_q = h["q"]
+                    break
+            if last_q:
+                ctx = f"(这是对上一个问题「{last_q}」的追问)\n\n"
+
         if web_results or weather_text:
             # 有外部信息:用融合提示词
             web_txt = "\n\n".join(
@@ -208,13 +237,13 @@ def _answer_with_stream(question: str, history: list):
                     weather_data=weather_text or "(本次未查询天气)",
                     web_data=web_txt,
                 )},
-                {"role": "user", "content": f"用户问题:{question}"},
+                {"role": "user", "content": f"{ctx}用户问题:{question}"},
             ]
         else:
             # 纯图谱回答
             msgs = [
                 {"role": "system", "content": ANSWER_PROMPT},
-                {"role": "user", "content": f"用户问题:{question}\n\n查询结果({len(records)} 条):\n{data_txt}"},
+                {"role": "user", "content": f"{ctx}用户问题:{question}\n\n查询结果({len(records)} 条):\n{data_txt}"},
             ]
 
         for chunk in call_llm_stream(msgs):
@@ -310,6 +339,7 @@ def handle_question(question: str):
         "cypher": cypher, "records": records, "path_html": path_html,
         "mq_html": mq_html,
         "route_html": route_html,
+        "route_info": route_info,
         "src_html": src_html,
         "question": question,
     })

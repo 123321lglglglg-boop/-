@@ -36,12 +36,30 @@ CATEGORY_WORDS = [
     "景点", "KTV", "酒吧", "网吧", "电影", "商场", "超市", "民宿",
     "快餐", "甜品", "奶茶", "面馆", "餐厅", "餐馆",
 ]
+# 菜品词:图谱有 Dish 实体,走图谱比向量精确
+DISH_WORDS = [
+    "羊杂", "羊杂碎", "冰煮羊", "铁锅焖面", "焖面", "烧麦", "稍麦", "熏鸡",
+    "刀削面", "麻辣烫", "肉夹馍", "串串香", "汉堡", "果茶", "生日蛋糕",
+    "莜面", "羊蝎子", "海鲜烧烤", "私房菜", "农家菜", "土豆粉",
+    "炸鸡", "披萨", "米线", "烤肉", "涮羊肉", "手把肉", "烩菜",
+]
+# 询问"哪里有/卖/吃"这类动词 + 菜品词 → 明确是找店,走图谱
+DISH_QUERY_VERBS = ["哪里有", "哪里卖", "哪卖", "哪家", "哪有", "吃", "卖", "推荐"]
 
 
 def classify(query: str) -> str:
     """分流:返回 'structured' | 'semantic' | 'hybrid'。"""
     q = (query or "").strip()
     if not q:
+        return "structured"
+
+    # 菜品查询优先:图谱有 Dish 实体,精确匹配优于语义近似
+    has_dish = any(d in q for d in DISH_WORDS)
+    if has_dish:
+        # "想吃冰煮羊" / "哪里有卖羊杂的" / "铁锅焖面哪家好" → 图谱
+        if any(v in q for v in ["吃", "卖", "哪", "推荐", "找"]):
+            return "structured"
+        # 单纯提菜品名,也是精确查询
         return "structured"
 
     has_struct = any(k in q for k in STRUCT_SIGNALS)
@@ -69,6 +87,68 @@ def classify(query: str) -> str:
         return "structured"
 
     return "semantic"
+
+
+# 追问的指代信号:出现这些词说明依赖上文
+FOLLOWUP_PATTERNS = [
+    "那", "呢", "还有", "再", "换", "别的", "其他", "另外",
+    "上面", "刚才", "刚说", "之前", "这个", "这些", "那些",
+    "它的", "他的", "他们", "其中", "里面",
+]
+
+
+def is_followup(query: str) -> bool:
+    """判断是否是追问(依赖上文的短问题)。"""
+    q = (query or "").strip()
+    if not q:
+        return False
+    # 短问题 + 指代词 → 追问
+    if len(q) <= 15 and any(p in q for p in FOLLOWUP_PATTERNS):
+        return True
+    # 很短的问句(<=8字)通常也是追问
+    if len(q) <= 8:
+        return True
+    return False
+
+
+def classify_with_context(query: str, history: list = None) -> str:
+    """带上下文的分流。
+
+    追问场景("那评分高的呢")字面没有结构化信号,
+    但它继承的是上一轮的检索意图,所以必须参考历史路由。
+    """
+    base = classify(query)
+    if not history:
+        return base
+
+    if not is_followup(query):
+        return base
+
+    # 追问:继承上一轮的意图(从最近一条有 cypher/来源的记录推断)
+    last_route = None
+    for h in reversed(history):
+        if h.get("route"):
+            last_route = h["route"]
+            break
+        # 旧记录没有 route 字段时,从 cypher 有无推断
+        if h.get("cypher"):
+            last_route = "structured"
+            break
+
+    if last_route in ("structured", "hybrid"):
+        # 上一轮走图谱/混合 → 追问很可能还是结构化加深
+        # 但如果追问本身有语义信号,则升级为混合
+        if classify(query) == "semantic":
+            return "hybrid"
+        return "structured"
+
+    if last_route == "semantic":
+        # 上一轮是语义检索 → 追问通常继续在语义空间
+        if classify(query) == "structured":
+            return "hybrid"
+        return "semantic"
+
+    return base
 
 
 # ---- RRF 融合(方案 5.1 解法 A)----

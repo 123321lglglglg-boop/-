@@ -35,10 +35,13 @@ def build_text(poi: dict) -> str:
     if keytag and keytag not in typ:
         parts.append(f"核心特色:{keytag}")
 
-    # 特色标签(有则拼,是语义检索的关键)
+    # 菜品:单独成行,不混进"特色标签"里
+    # 这样"哪里有羊杂"这类查询的语义信号不会被其他标签稀释
     tag = (poi.get("tag") or "").strip()
     if tag:
-        parts.append(f"特色标签:{tag}")
+        dishes = [x.strip() for x in tag.replace(";", ",").replace("、", ",").split(",") if x.strip()]
+        if dishes:
+            parts.append(f"招牌菜品:{'、'.join(dishes)}")
 
     # 位置
     loc = []

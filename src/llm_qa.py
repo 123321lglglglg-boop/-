@@ -39,12 +39,14 @@ SCHEMA_DESC = """
 - Chain(连锁品牌): chain_id, name
 - PriceLevel(价格带): name (经济<=30, 大众31-60, 中档61-120, 高端>120)
 - RatingTier(评分档): name (高分>=4.5, 良好4.0-4.4, 一般3.5-3.9, 较低<3.5)
+- **Dish(菜品/招牌菜): name (羊杂、冰煮羊、铁锅焖面、莜面、烧麦、熏鸡、刀削面、麻辣烫、肉夹馍、串串香、汉堡、果茶、生日蛋糕等 468 种)**
 
 关系(有方向):
 - (POI)-[:位于]->(District)
 - (POI)-[:位于商圈]->(BusinessArea)
 - (POI)-[:属于品类]->(CategoryL1)
 - (POI)-[:属于细类]->(CategoryL3)
+- **(POI)-[:招牌菜]->(Dish)   商家的招牌菜品**
 - (CategoryL3)-[:子类]->(CategoryL1)
 - (POI)-[:连锁品牌]->(Chain)
 - (POI)-[:价位]->(PriceLevel)
@@ -54,6 +56,7 @@ SCHEMA_DESC = """
 - (BusinessArea)-[:属于区县]->(District)
 
 常用查询模式:
+- **按菜品找店(重要)**: MATCH (p:POI)-[:招牌菜]->(d:Dish) WHERE d.name CONTAINS '羊杂' RETURN p.name AS 名称, p.rating AS 评分
 - 按区县找商家: MATCH (p:POI)-[:位于]->(d:District {name:'集宁区'})
 - 按细类: MATCH (p:POI)-[:属于细类]->(c:CategoryL3 {name:'火锅店'})
 - 按店名: WHERE p.name CONTAINS '蒙餐'

@@ -84,7 +84,32 @@ def main():
     print(f"待向量化:{len(items)} 条")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    ckpt = OUT_DIR / "embeddings_partial.jsonl"   # 断点续传
+
+    # 增量模式:已有向量 + 文本未变的直接复用(只重算文本变化的部分)
+    existing = {}
+    meta_file = OUT_DIR / "meta.jsonl"
+    vec_file = OUT_DIR / "embeddings.npy"
+    if meta_file.exists() and vec_file.exists():
+        import numpy as _np
+        _old = _np.load(vec_file)
+        with meta_file.open(encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                if line.strip() and i < len(_old):
+                    r = json.loads(line)
+                    existing[r["poi_id"]] = {"text": r.get("text", ""), "vec": _old[i]}
+        print(f"已加载现有向量:{len(existing)} 条")
+
+    reuse = {}
+    todo = []
+    for it in items:
+        e = existing.get(it["poi_id"])
+        if e and e["text"] == it["text"]:
+            reuse[it["poi_id"]] = e["vec"]
+        else:
+            todo.append(it)
+    print(f"可复用:{len(reuse)} 条 | 需重算:{len(todo)} 条")
+
+    ckpt = OUT_DIR / "embeddings_partial.jsonl"   # 断点续传(只针对本次重算的)
 
     done = {}
     if ckpt.exists():
@@ -120,12 +145,16 @@ def main():
     # ---- 落盘为 numpy ----
     import numpy as np
 
-    valid = [it for it in items if it["poi_id"] in done]
+    # 合并:复用的 + 本次计算的
+    all_vecs = dict(reuse)
+    all_vecs.update(done)
+
+    valid = [it for it in items if it["poi_id"] in all_vecs]
     if not valid:
         print("没有成功的向量,退出")
         sys.exit(1)
 
-    mat = np.array([done[it["poi_id"]] for it in valid], dtype="float32")
+    mat = np.array([all_vecs[it["poi_id"]] for it in valid], dtype="float32")
     # L2 归一化:之后用点积即余弦相似度
     norms = np.linalg.norm(mat, axis=1, keepdims=True)
     norms[norms == 0] = 1
