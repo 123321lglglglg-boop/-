@@ -129,14 +129,10 @@ def handle_question(question: str):
             with st.spinner("正在查询知识图谱…"):
                 answer_txt, cypher, records = _answer_with_stream(question, history)
 
-        if cypher or records:
-            with st.expander(f"查看查询细节({len(records)} 条结果)"):
-                st.markdown("**生成的 Cypher**")
-                st.code(cypher or "(未生成)", language="cypher")
-                if records:
-                    import pandas as pd
-                    st.dataframe(pd.DataFrame(records).head(10),
-                                 use_container_width=True, hide_index=True)
+        if records:
+            import pandas as pd
+            with st.expander(f"查看全部 {len(records)} 条结果"):
+                st.dataframe(pd.DataFrame(records), use_container_width=True, hide_index=True)
 
     st.session_state.chat.append({
         "role": "assistant", "content": answer_txt,
@@ -144,49 +140,9 @@ def handle_question(question: str):
     })
 
 
-def _scroll_to_top_once():
-    """修正 Streamlit 聊天页的自动滚动。
-
-    st.chat_input 会让移动端页面自动滚到底部,把顶部的标题和菜单顶出屏幕。
-    这里在页面加载后重置一次滚动位置(只在没有对话历史时)。
-    """
-    if st.session_state.get("_scrolled_fixed"):
-        return
-    st.session_state["_scrolled_fixed"] = True
-    st.components.v1.html(
-        """
-<script>
-(function() {
-  function reset() {
-    var doc;
-    try {
-      var w = window;
-      while (w.parent && w.parent !== w) { w = w.parent; }
-      doc = w.document;
-    } catch (e) { doc = document; }
-    if (!doc) return false;
-    var c = doc.querySelector('[data-testid="stAppScrollToBottomContainer"]');
-    if (c && c.scrollTop > 0) {
-      c.scrollTop = 0;
-      try { w.scrollTo(0, 0); } catch (e) {}
-    }
-    return true;
-  }
-  // 连续尝试几次,压过 Streamlit 的自动滚动
-  [0, 300, 800, 1500, 2500].forEach(function(ms) {
-    setTimeout(reset, ms);
-  });
-})();
-</script>
-""",
-        height=0,
-    )
-
-
 def render_chat_page():
     """首屏对话页。"""
     init_state()
-    _scroll_to_top_once()
 
     st.markdown(
         "<div style='text-align:center;margin:2px 0 6px'>"
@@ -208,14 +164,11 @@ def render_chat_page():
         for m in st.session_state.chat:
             with st.chat_message(m["role"]):
                 st.markdown(m["content"])
-                if m["role"] == "assistant" and m.get("cypher"):
-                    with st.expander(f"查看查询细节({len(m.get('records') or [])} 条结果)"):
-                        st.markdown("**生成的 Cypher**")
-                        st.code(m["cypher"], language="cypher")
-                        if m.get("records"):
-                            import pandas as pd
-                            st.dataframe(pd.DataFrame(m["records"]).head(10),
-                                         use_container_width=True, hide_index=True)
+                if m["role"] == "assistant" and m.get("records"):
+                    import pandas as pd
+                    with st.expander(f"查看全部 {len(m['records'])} 条结果"):
+                        st.dataframe(pd.DataFrame(m["records"]),
+                                     use_container_width=True, hide_index=True)
 
     render_examples()
 
