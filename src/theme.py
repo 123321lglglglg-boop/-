@@ -353,9 +353,6 @@ div[data-testid="stExpander"] summary:hover { color: #7dd3fc !important; }
   border-right: 1px solid rgba(255,255,255,0.1);
 }
 
-/* 分割线 */
-hr { border-color: rgba(255,255,255,0.11) !important; }
-
 /* 滚动条 */
 ::-webkit-scrollbar { width: 11px; height: 11px; }
 ::-webkit-scrollbar-track { background: rgba(255,255,255,0.035); border-radius: 8px; }
@@ -373,6 +370,80 @@ hr { border-color: rgba(255,255,255,0.11) !important; }
 /* 顶栏透明化 */
 [data-testid="stHeader"] { background: transparent !important; }
 [data-testid="stToolbar"] { right: 1rem; }
+
+/* ========== 沉浸式对话区 ========== */
+/* 减弱聊天气泡的分割感:去掉边框和厚重背景,让它融进页面 */
+[data-testid="stChatMessage"] {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0.35rem 0 !important;
+}
+[data-testid="stChatMessage"] [data-testid="stChatMessageAvatar"] {
+  background: rgba(255,255,255,0.10) !important;
+  border: 1px solid rgba(255,255,255,0.16) !important;
+}
+/* 助手消息:淡淡的玻璃底色,不用强边框 */
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
+  background: rgba(255,255,255,0.035) !important;
+  border-radius: 16px !important;
+  padding: 0.6rem 0.9rem !important;
+}
+
+/* 输入框:悬浮胶囊,融入背景但不失可发现性 */
+[data-testid="stChatInput"] {
+  background: rgba(255,255,255,0.07) !important;
+  backdrop-filter: blur(22px) saturate(160%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  border: 1px solid rgba(255,255,255,0.15) !important;
+  border-radius: 18px !important;
+  box-shadow: 0 10px 36px rgba(2,6,23,0.5), inset 0 1px 0 rgba(255,255,255,0.16);
+}
+[data-testid="stChatInput"] textarea,
+[data-testid="stChatInputContainer"] textarea {
+  background: transparent !important;
+  border: none !important;
+  color: #f1f5f9 !important;
+}
+[data-testid="stChatInput"] textarea::placeholder { color: #7d90a8 !important; }
+
+/* 底部输入区渐变遮罩:让内容"淡出"而不是硬生生切断 */
+.stApp [data-testid="stBottomBlockContainer"],
+.stApp [data-testid="stBottom"] {
+  background: linear-gradient(to top, #070b14 30%, rgba(7,11,20,0.86) 70%, transparent) !important;
+}
+
+/* 汉堡菜单(popover)样式 */
+[data-testid="stPopover"] > button {
+  border-radius: 13px !important;
+  border: 1px solid rgba(255,255,255,0.16) !important;
+  background: rgba(255,255,255,0.07) !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: #dbe6f3 !important;
+  font-size: 19px !important;
+  padding: 0.3rem 0.7rem !important;
+  transition: all .3s ease;
+}
+[data-testid="stPopover"] > button:hover {
+  border-color: rgba(125,211,252,0.5) !important;
+  box-shadow: 0 6px 22px rgba(56,189,248,0.25);
+  transform: translateY(-1px);
+}
+[data-testid="stPopoverBody"] {
+  background: rgba(15,23,42,0.94) !important;
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid rgba(255,255,255,0.15) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 18px 50px rgba(2,6,23,0.6);
+}
+
+/* 分割线:更柔和 */
+hr {
+  border-color: rgba(255,255,255,0.06) !important;
+  margin: 1.6rem 0 !important;
+}
 
 /* ========== 入场动画 ========== */
 @keyframes fadeSlideUp {
