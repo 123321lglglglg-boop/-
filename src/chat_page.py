@@ -19,6 +19,13 @@ from src.llm_qa import (
 )
 from src.reasoning_path import extract_paths
 from src.path_viz import render_paths_html
+from src.hybrid_qa import (
+    fetch_weather,
+    fetch_web_context,
+    needs_weather,
+    needs_web,
+)
+from src.source_viz import render_sources_html
 
 EXAMPLES = [
     "集宁区人均50以下的餐厅有哪些",
@@ -75,38 +82,64 @@ def history_for_llm(max_turns: int = 4) -> list:
 
 
 def _answer_with_stream(question: str, history: list):
-    """生成回答并流式展示。返回 (答案全文, cypher, records)。"""
+    """生成回答并流式展示。返回 (答案全文, cypher, records, web_results, weather_text)。"""
     cypher, records, err = text2cypher(question, history=history)
     if err:
         msg = f"查询失败:{err}"
         st.markdown(msg)
-        return msg, cypher, []
+        return msg, cypher, [], [], ""
+
+    # 判断是否需要联网 / 天气补充
+    need_web = needs_web(question)
+    web_results, weather_text = [], ""
+    if need_web:
+        with st.spinner("正在联网补充信息…"):
+            web_results = fetch_web_context(question, records)
+            if needs_weather(question):
+                weather_text = fetch_weather()
 
     placeholder = st.empty()
     collected = []
     try:
         from src.llm_qa import ANSWER_PROMPT, call_llm_stream
         import json as _json
+        from src.hybrid_qa import SYNTH_PROMPT
 
         data_txt = _json.dumps(records[:20], ensure_ascii=False, default=str, indent=1) \
             if records else "(查询结果为空)"
-        user_content = f"用户问题:{question}\n\n查询结果({len(records)} 条):\n{data_txt}"
 
-        msgs = [
-            {"role": "system", "content": ANSWER_PROMPT},
-            {"role": "user", "content": user_content},
-        ]
+        if web_results or weather_text:
+            # 有外部信息:用融合提示词
+            web_txt = "\n\n".join(
+                f"[{i+1}] {r['title']}\n    内容:{r['snippet']}\n    来源:{r['source']}({r['url']})"
+                for i, r in enumerate(web_results)
+            ) or "(无)"
+            msgs = [
+                {"role": "system", "content": "你在回答用户关于乌兰察布本地生活的问题。"},
+                {"role": "user", "content": SYNTH_PROMPT.format(
+                    graph_data=data_txt,
+                    weather_data=weather_text or "(本次未查询天气)",
+                    web_data=web_txt,
+                )},
+                {"role": "user", "content": f"用户问题:{question}"},
+            ]
+        else:
+            # 纯图谱回答
+            msgs = [
+                {"role": "system", "content": ANSWER_PROMPT},
+                {"role": "user", "content": f"用户问题:{question}\n\n查询结果({len(records)} 条):\n{data_txt}"},
+            ]
+
         for chunk in call_llm_stream(msgs):
             collected.append(chunk)
             placeholder.markdown("".join(collected) + "▌")
         placeholder.markdown("".join(collected))
     except Exception:
-        # 流式失败时退回普通调用
         text = generate_answer(question, records, history=history)
         placeholder.markdown(text)
         collected = [text]
 
-    return "".join(collected), cypher, records
+    return "".join(collected), cypher, records, web_results, weather_text
 
 
 def handle_question(question: str):
@@ -122,6 +155,8 @@ def handle_question(question: str):
     # 生成回答
     history = history_for_llm()
     path_html = ""
+    src_html = ""
+    web_results, weather_text = [], ""
     with st.chat_message("assistant"):
         try:
             check_rate_limit(st.session_state.get("client_id", "anon"))
@@ -130,7 +165,8 @@ def handle_question(question: str):
             answer_txt, cypher, records = str(e), "", []
         else:
             with st.spinner("正在查询知识图谱…"):
-                answer_txt, cypher, records = _answer_with_stream(question, history)
+                answer_txt, cypher, records, web_results, weather_text = \
+                    _answer_with_stream(question, history)
 
             # 推理路径:算好后存进消息,rerun 后由历史渲染分支展示
             if records:
@@ -141,10 +177,19 @@ def handle_question(question: str):
                 except Exception:
                     path_html = ""
 
+            # 来源面板(联网/天气)
+            if web_results or weather_text:
+                src_html = render_sources_html(web_results, weather_text)
+
     # 推理路径展示(放在聊天消息外,确保 expander 正常渲染)
     if path_html:
         with st.expander("🔍 查看推理路径", expanded=True):
             st.markdown(path_html, unsafe_allow_html=True)
+
+    # 信息来源展示
+    if src_html:
+        with st.expander("📡 查看信息来源", expanded=True):
+            st.markdown(src_html, unsafe_allow_html=True)
 
     if records:
         import pandas as pd
@@ -154,6 +199,7 @@ def handle_question(question: str):
     st.session_state.chat.append({
         "role": "assistant", "content": answer_txt,
         "cypher": cypher, "records": records, "path_html": path_html,
+        "src_html": src_html,
     })
 
 
@@ -186,6 +232,10 @@ def render_chat_page():
                     if m.get("path_html"):
                         with st.expander("🔍 查看推理路径", expanded=True):
                             st.markdown(m["path_html"], unsafe_allow_html=True)
+                    # 信息来源
+                    if m.get("src_html"):
+                        with st.expander("📡 查看信息来源", expanded=True):
+                            st.markdown(m["src_html"], unsafe_allow_html=True)
                     if m.get("records"):
                         import pandas as pd
                         with st.expander(f"查看全部 {len(m['records'])} 条结果"):
