@@ -73,7 +73,12 @@ TEXT2CYPHER_PROMPT = f"""你是 Neo4j Cypher 专家。根据下面的图数据�
 3. 禁止任何写操作(CREATE/DELETE/SET/MERGE/REMOVE/DROP/CALL)
 4. 返回的列名用中文别名,如 RETURN p.name AS 名称, p.rating AS 评分
 5. 结果默认 LIMIT 20,除非用户明确要更多
-6. 名字模糊匹配用 CONTAINS
+6. **店名必须用 CONTAINS 模糊匹配,禁止用精确等值匹配**。
+   数据库里的店名通常带后缀,例如用户说「乌兰图雅蒙餐」,
+   实际存的是「乌兰图雅·蒙餐(乌兰察布怡海佳苑店)」。
+   正确写法:MATCH (p:POI) WHERE p.name CONTAINS '乌兰图雅'
+   错误写法:MATCH (p:POI {{name:'乌兰图雅蒙餐'}})
+7. 用 CONTAINS 时只取店名的核心词(2-6 字),不要带后缀或括号内容
 """
 
 ANSWER_PROMPT = """你是本地生活助手。根据知识图谱查询结果,用自然、简洁的中文回答用户问题。

@@ -17,6 +17,8 @@ from src.llm_qa import (
     run_cypher,
     text2cypher,
 )
+from src.reasoning_path import extract_paths
+from src.path_viz import render_paths_html
 
 EXAMPLES = [
     "集宁区人均50以下的餐厅有哪些",
@@ -119,6 +121,7 @@ def handle_question(question: str):
 
     # 生成回答
     history = history_for_llm()
+    path_html = ""
     with st.chat_message("assistant"):
         try:
             check_rate_limit(st.session_state.get("client_id", "anon"))
@@ -129,14 +132,28 @@ def handle_question(question: str):
             with st.spinner("正在查询知识图谱…"):
                 answer_txt, cypher, records = _answer_with_stream(question, history)
 
-        if records:
-            import pandas as pd
-            with st.expander(f"查看全部 {len(records)} 条结果"):
-                st.dataframe(pd.DataFrame(records), use_container_width=True, hide_index=True)
+            # 推理路径:算好后存进消息,rerun 后由历史渲染分支展示
+            if records:
+                try:
+                    paths = extract_paths(question, cypher, records)
+                    if paths:
+                        path_html = render_paths_html(paths)
+                except Exception:
+                    path_html = ""
+
+    # 推理路径展示(放在聊天消息外,确保 expander 正常渲染)
+    if path_html:
+        with st.expander("🔍 查看推理路径", expanded=True):
+            st.markdown(path_html, unsafe_allow_html=True)
+
+    if records:
+        import pandas as pd
+        with st.expander(f"查看全部 {len(records)} 条结果"):
+            st.dataframe(pd.DataFrame(records), use_container_width=True, hide_index=True)
 
     st.session_state.chat.append({
         "role": "assistant", "content": answer_txt,
-        "cypher": cypher, "records": records,
+        "cypher": cypher, "records": records, "path_html": path_html,
     })
 
 
@@ -164,11 +181,16 @@ def render_chat_page():
         for m in st.session_state.chat:
             with st.chat_message(m["role"]):
                 st.markdown(m["content"])
-                if m["role"] == "assistant" and m.get("records"):
-                    import pandas as pd
-                    with st.expander(f"查看全部 {len(m['records'])} 条结果"):
-                        st.dataframe(pd.DataFrame(m["records"]),
-                                     use_container_width=True, hide_index=True)
+                if m["role"] == "assistant":
+                    # 推理路径(存在消息里,rerun 后仍能渲染)
+                    if m.get("path_html"):
+                        with st.expander("🔍 查看推理路径", expanded=True):
+                            st.markdown(m["path_html"], unsafe_allow_html=True)
+                    if m.get("records"):
+                        import pandas as pd
+                        with st.expander(f"查看全部 {len(m['records'])} 条结果"):
+                            st.dataframe(pd.DataFrame(m["records"]),
+                                         use_container_width=True, hide_index=True)
 
     render_examples()
 
