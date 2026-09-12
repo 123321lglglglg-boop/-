@@ -62,29 +62,59 @@ def inject_pwa(app_name="乌兰察布知识图谱"):
 
     # Streamlit Cloud 把 app 放在 iframe 里,而 iOS "添加到主屏幕"只读顶层页面的 head。
     # 这段脚本把关键标签从 iframe 提升到顶层文档(同源,可直接操作 parent)。
+    # 用定时器重试:Streamlit 页面动态渲染,head 可能尚未就绪。
     st.markdown(
         f"""
 <script>
 (function() {{
-  try {{
-    var head = window.parent.document.head;
+  var tries = 0;
+  var MAX = 40;              // 最多尝试 40 次(约 20 秒)
+  var INT = 500;             // 每 500ms 一次
+
+  function topDoc() {{
+    var w = window;
+    try {{
+      while (w.parent && w.parent !== w) {{ w = w.parent; }}
+      return w.document;
+    }} catch (e) {{
+      return window.parent.document;   // 跨域时退回上一层
+    }}
+  }}
+
+  function apply() {{
+    var doc;
+    try {{ doc = topDoc(); }} catch (e) {{ return false; }}
+    if (!doc || !doc.head) return false;
+
+    var head = doc.head;
     function upsert(sel, make) {{
       if (!head.querySelector(sel)) head.appendChild(make());
     }}
     function mk(tag, attrs) {{
-      var el = window.parent.document.createElement(tag);
+      var el = doc.createElement(tag);
       Object.keys(attrs).forEach(function(k) {{ el.setAttribute(k, attrs[k]); }});
       return el;
     }}
+
     upsert('link[rel="manifest"]', function() {{ return mk('link', {{rel: 'manifest', href: '{manifest_uri}'}}); }});
     upsert('link[rel="apple-touch-icon"]', function() {{ return mk('link', {{rel: 'apple-touch-icon', href: '{apple_icon}'}}); }});
     upsert('meta[name="apple-mobile-web-app-capable"]', function() {{ return mk('meta', {{name: 'apple-mobile-web-app-capable', content: 'yes'}}); }});
     upsert('meta[name="apple-mobile-web-app-title"]', function() {{ return mk('meta', {{name: 'apple-mobile-web-app-title', content: '{app_name}'}}); }});
     upsert('meta[name="apple-mobile-web-app-status-bar-style"]', function() {{ return mk('meta', {{name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent'}}); }});
     upsert('meta[name="mobile-web-app-capable"]', function() {{ return mk('meta', {{name: 'mobile-web-app-capable', content: 'yes'}}); }});
-    upsert('meta[name="theme-color"]', function() {{ return mk('meta', {{name: 'theme-color', content: '#070b14'}}); }});
-  }} catch (e) {{
-    /* 跨域时静默失败(本地开发或未来 Streamlit 改架构) */
+    // theme-color 可能已存在(Streamlit 自带白色),需要覆盖而非跳过
+    var tc = head.querySelector('meta[name="theme-color"]');
+    if (tc) {{ tc.setAttribute('content', '#070b14'); }}
+    else {{ head.appendChild(mk('meta', {{name: 'theme-color', content: '#070b14'}})); }}
+
+    return true;
+  }}
+
+  if (!apply()) {{
+    var t = setInterval(function() {{
+      tries++;
+      if (apply() || tries >= MAX) clearInterval(t);
+    }}, INT);
   }}
 }})();
 </script>
