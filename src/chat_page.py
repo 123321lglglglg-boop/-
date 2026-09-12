@@ -28,6 +28,7 @@ from src.hybrid_qa import (
 from src.source_viz import render_sources_html
 from src.multi_query import is_vague, multi_query_answer
 from src.multi_viz import render_multi_html
+from src.feedback import save_feedback
 
 EXAMPLES = [
     "集宁区人均50以下的餐厅有哪些",
@@ -104,6 +105,7 @@ def _answer_with_stream(question: str, history: list):
                 "merged": mq["records"],
             }
 
+    multi_info = None
     cypher, records, err = text2cypher(question, history=history)
     if err:
         msg = f"查询失败:{err}"
@@ -233,7 +235,78 @@ def handle_question(question: str):
         "cypher": cypher, "records": records, "path_html": path_html,
         "mq_html": mq_html,
         "src_html": src_html,
+        "question": question,
     })
+
+
+def _msg_id(m: dict) -> str:
+    """给每条消息生成稳定 ID(用于反馈关联)。"""
+    if "_fid" not in m:
+        import hashlib
+        raw = f"{m.get('content','')[:80]}|{m.get('question','')}"
+        m["_fid"] = hashlib.md5(raw.encode()).hexdigest()[:16]
+    return m["_fid"]
+
+
+def _feedback_ui(msg_index: int, m: dict):
+    """每条回答下方的赞/踩。
+
+    产品考虑:点赞显示可自定义文案;点踩必须收集具体意见,
+    这样反馈才有改进价值(只统计"踩"的数量没有意义)。
+    """
+    fid = _msg_id(m)
+    key = f"fb_{fid}"
+    st.session_state.setdefault("fb_state", {})
+    state = st.session_state["fb_state"].get(fid)
+
+    # 已提交 → 显示结果
+    if state == "liked":
+        st.caption("👍 感谢反馈!我们会继续保持。")
+        return
+    if state == "disliked_done":
+        st.caption("👎 您的意见我们会及时改进,感谢您的反馈!")
+        return
+
+    # 点踩后 → 展开输入框
+    if state == "disliked":
+        st.markdown(
+            "<div style='color:#fca5a5;font-size:13px;margin:6px 0 2px'>"
+            "👎 哪里不满意?告诉我们,我们会改进:</div>",
+            unsafe_allow_html=True,
+        )
+        comment = st.text_area(
+            "不满意的地方", key=f"cmt_{fid}", label_visibility="collapsed",
+            placeholder="例如:推荐的不符合我的需求 / 信息不准确 / 结果太少…",
+            height=80,
+        )
+        c1, c2 = st.columns([1, 4])
+        if c1.button("提交", key=f"sub_{fid}", type="primary"):
+            ok = save_feedback(
+                fid,
+                question=m.get("question", ""),
+                answer=m.get("content", ""),
+                rating=-1,
+                comment=comment,
+                client_id=st.session_state.get("client_id", "anon"),
+            )
+            st.session_state["fb_state"][fid] = "disliked_done" if ok else "disliked"
+            if not ok:
+                st.warning("提交失败,请稍后重试")
+            st.rerun()
+        return
+
+    # 默认 → 两个图标
+    c1, c2, _ = st.columns([1, 1, 10])
+    if c1.button("👍", key=f"up_{fid}", help="回答有帮助"):
+        save_feedback(
+            fid, question=m.get("question", ""), answer=m.get("content", ""),
+            rating=1, client_id=st.session_state.get("client_id", "anon"),
+        )
+        st.session_state["fb_state"][fid] = "liked"
+        st.rerun()
+    if c2.button("👎", key=f"down_{fid}", help="回答需要改进"):
+        st.session_state["fb_state"][fid] = "disliked"
+        st.rerun()
 
 
 def render_chat_page():
@@ -257,7 +330,7 @@ def render_chat_page():
         with st.chat_message("assistant"):
             st.markdown(WELCOME)
     else:
-        for m in st.session_state.chat:
+        for idx, m in enumerate(st.session_state.chat):
             with st.chat_message(m["role"]):
                 st.markdown(m["content"])
                 if m["role"] == "assistant":
@@ -278,6 +351,8 @@ def render_chat_page():
                         with st.expander(f"查看全部 {len(m['records'])} 条结果"):
                             st.dataframe(pd.DataFrame(m["records"]),
                                          use_container_width=True, hide_index=True)
+                    # 每条回答的评价入口
+                    _feedback_ui(idx, m)
 
     render_examples()
 
