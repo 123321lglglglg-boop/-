@@ -46,7 +46,7 @@ def extract_paths(question: str, cypher: str, records: list) -> list:
         if "邻近" in c:
             paths = _paths_proximity(records, question)
         elif "连锁品牌" in c:
-            paths = _paths_chain(records)
+            paths = _paths_chain(records, c)
         elif "位于商圈" in c and ("属于细类" in c or "属于品类" in c):
             paths = _paths_same_area(records)
         elif "位于商圈" in c or "商圈" in question:
@@ -169,17 +169,27 @@ def _paths_same_area(records: list) -> list:
     return out
 
 
-def _paths_chain(records: list) -> list:
-    """连锁品牌:品牌 → 各家门店。"""
-    out = []
-    rec = records[0]
-    brand = rec.get("品牌") or rec.get("品牌名") or rec.get("chain_name")
+def _paths_chain(records: list, cypher: str = "") -> list:
+    """连锁品牌:品牌 → 各家门店。
+
+    品牌名优先从 Cypher 里的 CONTAINS '关键词' 提取,
+    因为 LLM 返回的列名不固定(有时是「品牌」,有时是「门店名称」)。
+    """
+    brand = None
+    # 从 cypher 里抠 CONTAINS 'xxx'
+    m = re.search(r"CONTAINS\s+'([^']+)'", cypher or "")
+    if m:
+        brand = m.group(1)
+    if not brand:
+        rec = records[0]
+        brand = rec.get("品牌") or rec.get("品牌名") or rec.get("chain_name")
     if not brand:
         return []
+
     shops = _run(
         """
         MATCH (p:POI)-[:连锁品牌]->(c:Chain)
-        WHERE c.name CONTAINS $brand OR c.chain_id = $brand
+        WHERE c.name CONTAINS $brand
         OPTIONAL MATCH (p)-[:位于]->(d:District)
         OPTIONAL MATCH (p)-[:位于商圈]->(a:BusinessArea)
         RETURN p.name AS 门店, d.name AS 区县, a.name AS 商圈, p.rating AS 评分
@@ -187,13 +197,16 @@ def _paths_chain(records: list) -> list:
         """,
         brand=str(brand),
     )
+    if not shops:
+        return []
+
     steps = []
     for s_ in shops:
         note = " · ".join(x for x in [s_.get("区县"), s_.get("商圈")] if x)
-        steps.append({"from": brand, "rel": "拥有门店", "to": s_["门店"], "note": note or None})
-    if steps:
-        out.append({"start": brand, "steps": steps})
-    return out
+        if s_.get("评分"):
+            note = f"{note} · {s_['评分']}分" if note else f"{s_['评分']}分"
+        steps.append({"from": str(brand), "rel": "拥有门店", "to": s_["门店"], "note": note or None})
+    return [{"start": str(brand), "steps": steps}]
 
 
 def _paths_category(records: list) -> list:
