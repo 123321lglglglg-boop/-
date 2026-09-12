@@ -55,8 +55,9 @@ LIQUID_CSS = """
 /* 内容层浮在光斑之上 */
 .stApp > header, .stApp .main, .stApp .block-container { position: relative; z-index: 1; }
 
-.main .block-container {
-  padding-top: 2.2rem;
+[data-testid="stMainBlockContainer"],
+.stApp .block-container {
+  padding-top: 0.5rem !important;
   max-width: 1500px;
 }
 
@@ -367,8 +368,12 @@ div[data-testid="stExpander"] summary:hover { color: #7dd3fc !important; }
   background-clip: content-box;
 }
 
-/* 顶栏透明化 */
-[data-testid="stHeader"] { background: transparent !important; }
+/* 顶栏透明化:保留最小高度,避免内容顶到屏幕边缘 */
+[data-testid="stHeader"] {
+  background: transparent !important;
+  height: 2.8rem !important;
+  min-height: 2.8rem !important;
+}
 [data-testid="stToolbar"] { right: 1rem; }
 
 /* ========== 沉浸式对话区 ========== */
@@ -443,6 +448,9 @@ div[data-testid="stExpander"] summary:hover { color: #7dd3fc !important; }
 }
 
 /* 汉堡菜单(popover)样式 */
+[data-testid="stPopover"] {
+  margin-top: 1.7rem;
+}
 [data-testid="stPopover"] > button {
   border-radius: 13px !important;
   border: 1px solid rgba(255,255,255,0.16) !important;
@@ -493,7 +501,7 @@ hr {
 
 /* ========== 移动端适配 ========== */
 @media (max-width: 768px) {
-  .main .block-container { padding-left: 0.9rem; padding-right: 0.9rem; }
+  [data-testid="stMainBlockContainer"] { padding-left: 0.9rem; padding-right: 0.9rem; }
   h1 { font-size: 2rem !important; }
   .stTabs [role="tab"] { padding: 0 12px; font-size: 0.85rem; height: 42px; }
   [data-testid="stMetric"] { border-radius: 16px !important; }

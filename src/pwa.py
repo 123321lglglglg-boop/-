@@ -114,11 +114,13 @@ MOBILE_CSS = """
 <style>
 /* iOS 全屏(从主屏打开)时给顶部留出状态栏空间 */
 @media (display-mode: standalone) {
-  .main .block-container { padding-top: 3.2rem !important; }
+  [data-testid="stMainBlockContainer"] { padding-top: 2.6rem !important; }
 }
 /* 触控目标增大(移动端) */
 @media (max-width: 820px) {
-  .main .block-container { padding-left: 0.7rem !important; padding-right: 0.7rem !important; }
+  /* 顶部留出呼吸空间,同时让 header 不占位 */
+  [data-testid="stMainBlockContainer"] { padding-top: 1.8rem !important; }
+  [data-testid="stMainBlockContainer"] { padding-left: 0.7rem !important; padding-right: 0.7rem !important; }
   h1 { font-size: 1.75rem !important; }
   .stTabs [role="tab"] {
     padding: 0 10px !important;

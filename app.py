@@ -122,7 +122,7 @@ def main():
     # ---- 左上角汉堡菜单(替代顶部 tab 栏)----
     nav_col, _ = st.columns([1, 11])
     with nav_col:
-        with st.popover("☰", use_container_width=True):
+        with st.popover("☰"):
             options = ["💬 对话", "🗺️ 地图分布", "🕸️ 图谱探索", "🔍 商家查询"]
             choice = st.radio("功能", options, key="nav",
                               label_visibility="collapsed", index=None)

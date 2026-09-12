@@ -26,15 +26,9 @@ EXAMPLES = [
     "离乌兰图雅蒙餐最近的商家",
 ]
 
-WELCOME = """你好 👋 我可以查询乌兰察布的 **6,949 个商家**和 **53,700 条关系**。
+WELCOME = """你好 👋 我能查乌兰察布的 **6,949 个商家**。
 
-试试问我:
-
-- 集宁区人均 50 以下的餐厅有哪些?
-- 评分最高的蒙餐馆在哪?
-- 离乌兰图雅蒙餐最近的商家有哪些?
-
-**可以追问**,比如接着问"那评分 4.5 以上的呢?"——我会记得上文。"""
+直接问就行,也可以连续追问。"""
 
 
 def init_state():
@@ -49,14 +43,21 @@ def _example_clicked(q: str):
 
 
 def render_examples():
-    """示例问题按钮(仅在还没对话时展示,避免占地方)。"""
+    """示例问题按钮(仅在还没对话时展示)。
+
+    手机上单列会撑高页面触发自动滚动,所以用两列网格布局。
+    """
     if st.session_state.chat:
         return
-    cols = st.columns(len(EXAMPLES))
-    for i, (col, q) in enumerate(zip(cols, EXAMPLES)):
-        short = q if len(q) <= 14 else q[:13] + "…"
-        if col.button(short, key=f"ex_{i}", use_container_width=True, help=q):
-            _example_clicked(q)
+
+    # 两列网格:手机上每行两个,高度减半
+    rows = [EXAMPLES[i:i + 2] for i in range(0, len(EXAMPLES), 2)]
+    for row in rows:
+        cols = st.columns(2)
+        for col, q in zip(cols, row):
+            short = q if len(q) <= 11 else q[:10] + "…"
+            if col.button(short, key=f"ex_{q}", use_container_width=True, help=q):
+                _example_clicked(q)
 
 
 def history_for_llm(max_turns: int = 4) -> list:
@@ -143,9 +144,49 @@ def handle_question(question: str):
     })
 
 
+def _scroll_to_top_once():
+    """修正 Streamlit 聊天页的自动滚动。
+
+    st.chat_input 会让移动端页面自动滚到底部,把顶部的标题和菜单顶出屏幕。
+    这里在页面加载后重置一次滚动位置(只在没有对话历史时)。
+    """
+    if st.session_state.get("_scrolled_fixed"):
+        return
+    st.session_state["_scrolled_fixed"] = True
+    st.components.v1.html(
+        """
+<script>
+(function() {
+  function reset() {
+    var doc;
+    try {
+      var w = window;
+      while (w.parent && w.parent !== w) { w = w.parent; }
+      doc = w.document;
+    } catch (e) { doc = document; }
+    if (!doc) return false;
+    var c = doc.querySelector('[data-testid="stAppScrollToBottomContainer"]');
+    if (c && c.scrollTop > 0) {
+      c.scrollTop = 0;
+      try { w.scrollTo(0, 0); } catch (e) {}
+    }
+    return true;
+  }
+  // 连续尝试几次,压过 Streamlit 的自动滚动
+  [0, 300, 800, 1500, 2500].forEach(function(ms) {
+    setTimeout(reset, ms);
+  });
+})();
+</script>
+""",
+        height=0,
+    )
+
+
 def render_chat_page():
     """首屏对话页。"""
     init_state()
+    _scroll_to_top_once()
 
     st.markdown(
         "<div style='text-align:center;margin:2px 0 6px'>"
