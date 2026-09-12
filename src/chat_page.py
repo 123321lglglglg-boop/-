@@ -26,6 +26,8 @@ from src.hybrid_qa import (
     needs_web,
 )
 from src.source_viz import render_sources_html
+from src.multi_query import is_vague, multi_query_answer
+from src.multi_viz import render_multi_html
 
 EXAMPLES = [
     "集宁区人均50以下的餐厅有哪些",
@@ -82,12 +84,31 @@ def history_for_llm(max_turns: int = 4) -> list:
 
 
 def _answer_with_stream(question: str, history: list):
-    """生成回答并流式展示。返回 (答案全文, cypher, records, web_results, weather_text)。"""
+    """生成回答并流式展示。返回 (答案, cypher, records, web_results, weather_text, multi_info)。"""
+    # ---- 模糊问题:优先走 Multi-Query 多角度检索 ----
+    # 判断依据只有「问题是否宽泛」:单一 Cypher 即使能查出结果,
+    # 也只会覆盖一个角度(如全是 KTV),不如多角度召回全面。
+    if is_vague(question):
+        with st.spinner("正在从多个角度检索…"):
+            mq = multi_query_answer(question)
+        if mq.get("ok") and mq.get("records"):
+            flat = []
+            for sr in mq["results"]:
+                for rec in sr["records"]:
+                    flat.append(rec)
+            answer_txt = mq["answer"]
+            st.markdown(answer_txt)
+            return answer_txt, "", flat, [], "", {
+                "queries": mq["queries"],
+                "results": mq["results"],
+                "merged": mq["records"],
+            }
+
     cypher, records, err = text2cypher(question, history=history)
     if err:
         msg = f"查询失败:{err}"
         st.markdown(msg)
-        return msg, cypher, [], [], ""
+        return msg, cypher, [], [], "", None
 
     # 判断是否需要联网 / 天气补充
     need_web = needs_web(question)
@@ -139,7 +160,7 @@ def _answer_with_stream(question: str, history: list):
         placeholder.markdown(text)
         collected = [text]
 
-    return "".join(collected), cypher, records, web_results, weather_text
+    return "".join(collected), cypher, records, web_results, weather_text, multi_info
 
 
 def handle_question(question: str):
@@ -156,6 +177,7 @@ def handle_question(question: str):
     history = history_for_llm()
     path_html = ""
     src_html = ""
+    mq_html = ""
     web_results, weather_text = [], ""
     with st.chat_message("assistant"):
         try:
@@ -163,13 +185,18 @@ def handle_question(question: str):
         except RateLimited as e:
             st.warning(str(e))
             answer_txt, cypher, records = str(e), "", []
+            multi_info = None
         else:
             with st.spinner("正在查询知识图谱…"):
-                answer_txt, cypher, records, web_results, weather_text = \
+                answer_txt, cypher, records, web_results, weather_text, multi_info = \
                     _answer_with_stream(question, history)
 
+            # Multi-Query 扩展过程展示
+            if multi_info:
+                mq_html = render_multi_html(multi_info["queries"], multi_info["results"])
+
             # 推理路径:算好后存进消息,rerun 后由历史渲染分支展示
-            if records:
+            if records and not multi_info:
                 try:
                     paths = extract_paths(question, cypher, records)
                     if paths:
@@ -180,6 +207,11 @@ def handle_question(question: str):
             # 来源面板(联网/天气)
             if web_results or weather_text:
                 src_html = render_sources_html(web_results, weather_text)
+
+    # 多角度检索过程展示
+    if mq_html:
+        with st.expander("🔎 查看检索过程(多角度召回)", expanded=True):
+            st.markdown(mq_html, unsafe_allow_html=True)
 
     # 推理路径展示(放在聊天消息外,确保 expander 正常渲染)
     if path_html:
@@ -199,6 +231,7 @@ def handle_question(question: str):
     st.session_state.chat.append({
         "role": "assistant", "content": answer_txt,
         "cypher": cypher, "records": records, "path_html": path_html,
+        "mq_html": mq_html,
         "src_html": src_html,
     })
 
@@ -228,6 +261,10 @@ def render_chat_page():
             with st.chat_message(m["role"]):
                 st.markdown(m["content"])
                 if m["role"] == "assistant":
+                    # 多角度检索过程
+                    if m.get("mq_html"):
+                        with st.expander("🔎 查看检索过程(多角度召回)", expanded=True):
+                            st.markdown(m["mq_html"], unsafe_allow_html=True)
                     # 推理路径(存在消息里,rerun 后仍能渲染)
                     if m.get("path_html"):
                         with st.expander("🔍 查看推理路径", expanded=True):
