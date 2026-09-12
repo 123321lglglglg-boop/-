@@ -18,3 +18,8 @@ data/demo_test.log
 data/raw/
 data/export/
 data/processed/pois_clean.json
+siliconflow_key.txt
+
+# 向量化中间产物(保留最终的 npy + jsonl)
+data/vectors/embeddings_partial.jsonl
+data/vectorize.log

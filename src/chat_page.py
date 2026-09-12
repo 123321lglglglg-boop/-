@@ -29,6 +29,9 @@ from src.source_viz import render_sources_html
 from src.multi_query import is_vague, multi_query_answer
 from src.multi_viz import render_multi_html
 from src.feedback import save_feedback
+from src.hybrid_retrieval import classify
+from src.vector_search import index_ready, semantic_search
+from src.route_viz import render_route_html
 
 EXAMPLES = [
     "集宁区人均50以下的餐厅有哪些",
@@ -84,12 +87,52 @@ def history_for_llm(max_turns: int = 4) -> list:
     return hist[-max_turns:]
 
 
+def _kg_search(question: str, history: list):
+    """图谱检索:图数据库里的精确查询。返回 [{poi_id, name, text, source}, …]。"""
+    cypher, records, err = text2cypher(question, history=history)
+    if err or not records:
+        return [], cypher, records
+    import json as _json
+    out = []
+    for r in records:
+        out.append({
+            "poi_id": r.get("poi_id") or r.get("名称"),
+            "name": r.get("名称") or r.get("name") or "",
+            "text": _json.dumps(r, ensure_ascii=False, default=str)[:300],
+            "score": 1.0,
+            "source": "kg",
+            "raw": r,
+        })
+    return out, cypher, records
+
+
 def _answer_with_stream(question: str, history: list):
-    """生成回答并流式展示。返回 (答案, cypher, records, web_results, weather_text, multi_info)。"""
-    # ---- 模糊问题:优先走 Multi-Query 多角度检索 ----
-    # 判断依据只有「问题是否宽泛」:单一 Cypher 即使能查出结果,
-    # 也只会覆盖一个角度(如全是 KTV),不如多角度召回全面。
-    if is_vague(question):
+    """生成回答并流式展示。返回 (答案, cypher, records, web_results, weather_text, multi_info, route_info)。
+
+    检索优先级(GraphRAG 架构):
+      1. 走向量:问题含主观/体验类语义信号 → 语义检索最准
+      2. 走图谱:结构化条件(人均/数量/评分/关系)
+      3. 走 Multi-Query:图谱和向量都难以覆盖的宽泛场景问题
+    """
+    multi_info = None
+    route = classify(question)
+
+    # ---- 先做 GraphRAG 双引擎检索 ----
+    route_info = {"route": route, "kg_count": 0, "vec_count": 0}
+    vector_mode = route in ("semantic", "hybrid")
+    vec_results = []
+
+    if vector_mode and index_ready():
+        with st.spinner("正在做语义检索…"):
+            try:
+                vec_results = semantic_search(question, top_k=10)
+            except Exception:
+                vec_results = []
+        route_info["vec_count"] = len(vec_results)
+
+    # ---- 宽泛场景问题:两路都覆盖不了时,才用 Multi-Query 多角度召回 ----
+    # 判断:问题宽泛 + 语义信号不明确(纯场景/时间类,如"晚上有什么玩的")
+    if is_vague(question) and route == "structured" and not vec_results:
         with st.spinner("正在从多个角度检索…"):
             mq = multi_query_answer(question)
         if mq.get("ok") and mq.get("records"):
@@ -103,14 +146,35 @@ def _answer_with_stream(question: str, history: list):
                 "queries": mq["queries"],
                 "results": mq["results"],
                 "merged": mq["records"],
-            }
+            }, None
 
-    multi_info = None
     cypher, records, err = text2cypher(question, history=history)
-    if err:
+    if err and not vec_results:
         msg = f"查询失败:{err}"
         st.markdown(msg)
-        return msg, cypher, [], [], "", None
+        return msg, cypher, [], [], "", None, None
+    route_info["kg_count"] = len(records or [])
+
+    # 语义路由:主要用向量结果,图谱结果作为补充
+    if route == "semantic" and vec_results:
+        records = [{"名称": v["name"], "说明": v["text"].replace("\n", " · ")[:160],
+                    "_source": "语义检索"} for v in vec_results[:8]]
+    elif route == "hybrid" and vec_results and records:
+        # 混合:两路合并去重(图谱优先,向量补位)
+        seen = set()
+        merged = []
+        for r in records[:8]:
+            name = r.get("名称") or r.get("name")
+            if name and name not in seen:
+                seen.add(name)
+                merged.append(r)
+        for v in vec_results[:5]:
+            if v["name"] not in seen:
+                seen.add(v["name"])
+                merged.append({"名称": v["name"],
+                               "说明": v["text"].replace("\n", " · ")[:160],
+                               "_source": "语义检索"})
+        records = merged
 
     # 判断是否需要联网 / 天气补充
     need_web = needs_web(question)
@@ -162,7 +226,7 @@ def _answer_with_stream(question: str, history: list):
         placeholder.markdown(text)
         collected = [text]
 
-    return "".join(collected), cypher, records, web_results, weather_text, multi_info
+    return "".join(collected), cypher, records, web_results, weather_text, multi_info, route_info
 
 
 def handle_question(question: str):
@@ -180,6 +244,7 @@ def handle_question(question: str):
     path_html = ""
     src_html = ""
     mq_html = ""
+    route_html = ""
     web_results, weather_text = [], ""
     with st.chat_message("assistant"):
         try:
@@ -188,17 +253,22 @@ def handle_question(question: str):
             st.warning(str(e))
             answer_txt, cypher, records = str(e), "", []
             multi_info = None
+            route_info = None
         else:
-            with st.spinner("正在查询知识图谱…"):
-                answer_txt, cypher, records, web_results, weather_text, multi_info = \
+            with st.spinner("正在检索…"):
+                answer_txt, cypher, records, web_results, weather_text, multi_info, route_info = \
                     _answer_with_stream(question, history)
+
+            # GraphRAG 双引擎:展示走了哪条路
+            if route_info and route_info.get("route") in ("semantic", "hybrid"):
+                route_html = render_route_html(route_info)
 
             # Multi-Query 扩展过程展示
             if multi_info:
                 mq_html = render_multi_html(multi_info["queries"], multi_info["results"])
 
             # 推理路径:算好后存进消息,rerun 后由历史渲染分支展示
-            if records and not multi_info:
+            if records and not multi_info and route_info.get("route") != "semantic":
                 try:
                     paths = extract_paths(question, cypher, records)
                     if paths:
@@ -209,6 +279,11 @@ def handle_question(question: str):
             # 来源面板(联网/天气)
             if web_results or weather_text:
                 src_html = render_sources_html(web_results, weather_text)
+
+    # GraphRAG 检索路径展示
+    if route_html:
+        with st.expander("🧭 查看检索路径(双引擎)", expanded=True):
+            st.markdown(route_html, unsafe_allow_html=True)
 
     # 多角度检索过程展示
     if mq_html:
@@ -234,6 +309,7 @@ def handle_question(question: str):
         "role": "assistant", "content": answer_txt,
         "cypher": cypher, "records": records, "path_html": path_html,
         "mq_html": mq_html,
+        "route_html": route_html,
         "src_html": src_html,
         "question": question,
     })
@@ -334,6 +410,10 @@ def render_chat_page():
             with st.chat_message(m["role"]):
                 st.markdown(m["content"])
                 if m["role"] == "assistant":
+                    # GraphRAG 检索路径
+                    if m.get("route_html"):
+                        with st.expander("🧭 查看检索路径(双引擎)", expanded=True):
+                            st.markdown(m["route_html"], unsafe_allow_html=True)
                     # 多角度检索过程
                     if m.get("mq_html"):
                         with st.expander("🔎 查看检索过程(多角度召回)", expanded=True):
