@@ -390,27 +390,56 @@ div[data-testid="stExpander"] summary:hover { color: #7dd3fc !important; }
   padding: 0.6rem 0.9rem !important;
 }
 
-/* 输入框:悬浮胶囊,融入背景但不失可发现性 */
+/* 底部输入区:融入背景,不要割裂感 */
+/* 底栏容器保持透明,让页面背景透上来 */
+[data-testid="stBottom"],
+[data-testid="stBottomBlockContainer"],
+[data-testid="stBottom"] > div,
+[data-testid="stBottomBlockContainer"] > div {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* 只在输入框正下方加一层柔和光晕,而不是整块纯色背景 */
 [data-testid="stChatInput"] {
-  background: rgba(255,255,255,0.07) !important;
-  backdrop-filter: blur(22px) saturate(160%);
-  -webkit-backdrop-filter: blur(22px) saturate(160%);
-  border: 1px solid rgba(255,255,255,0.15) !important;
-  border-radius: 18px !important;
-  box-shadow: 0 10px 36px rgba(2,6,23,0.5), inset 0 1px 0 rgba(255,255,255,0.16);
+  background: linear-gradient(135deg,
+    rgba(255,255,255,0.10) 0%,
+    rgba(125,211,252,0.07) 45%,
+    rgba(168,85,247,0.07) 100%) !important;
+  backdrop-filter: blur(26px) saturate(170%);
+  -webkit-backdrop-filter: blur(26px) saturate(170%);
+  border: 1px solid rgba(255,255,255,0.18) !important;
+  border-radius: 22px !important;
+  box-shadow:
+    0 12px 40px rgba(2,6,23,0.55),
+    0 0 0 1px rgba(125,211,252,0.06),
+    inset 0 1px 0 rgba(255,255,255,0.20);
+  transition: all .3s ease;
+}
+[data-testid="stChatInput"]:focus-within {
+  border-color: rgba(125,211,252,0.45) !important;
+  box-shadow:
+    0 14px 46px rgba(56,189,248,0.22),
+    inset 0 1px 0 rgba(255,255,255,0.26);
 }
 [data-testid="stChatInput"] textarea,
-[data-testid="stChatInputContainer"] textarea {
+[data-testid="stChatInput"] input {
   background: transparent !important;
   border: none !important;
   color: #f1f5f9 !important;
 }
-[data-testid="stChatInput"] textarea::placeholder { color: #7d90a8 !important; }
+[data-testid="stChatInput"] textarea::placeholder,
+[data-testid="stChatInput"] input::placeholder { color: #7d90a8 !important; }
 
-/* 底部输入区渐变遮罩:让内容"淡出"而不是硬生生切断 */
-.stApp [data-testid="stBottomBlockContainer"],
-.stApp [data-testid="stBottom"] {
-  background: linear-gradient(to top, #070b14 30%, rgba(7,11,20,0.86) 70%, transparent) !important;
+/* 输入框上方极淡的渐变,让对话内容自然"淡出"到输入框 */
+.stApp [data-testid="stBottom"]::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: -40px;
+  height: 40px;
+  background: linear-gradient(to bottom, transparent, rgba(7,11,20,0.5));
+  pointer-events: none;
 }
 
 /* 汉堡菜单(popover)样式 */

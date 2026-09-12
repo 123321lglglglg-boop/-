@@ -123,8 +123,7 @@ def main():
     nav_col, _ = st.columns([1, 11])
     with nav_col:
         with st.popover("☰", use_container_width=True):
-            st.markdown("**探索图谱**")
-            options = ["💬 对话", "🗺️ 地图分布", "🕸️ 图谱探索", "🔍 商家查询", "📖 项目介绍"]
+            options = ["💬 对话", "🗺️ 地图分布", "🕸️ 图谱探索", "🔍 商家查询"]
             choice = st.radio("功能", options, key="nav",
                               label_visibility="collapsed", index=None)
 
@@ -161,11 +160,9 @@ def main():
     elif page == "🔍 商家查询":
         _render_merchant_search()
 
-    else:
-        _render_about(stats_raw)
-
-    st.divider()
-    st.caption("知识图谱作品集 | 采集 → 清洗 → 实体对齐 → 图谱增强 → Neo4j → 对话式问答")
+    if page != "💬 对话":
+        st.divider()
+        st.caption("知识图谱作品集 | 采集 → 清洗 → 实体对齐 → 图谱增强 → Neo4j → 对话式问答")
 
 
 def _render_graph_explore():
@@ -229,53 +226,6 @@ def _render_merchant_search():
         else:
             st.success(f"找到 {len(df)} 家")
             st.dataframe(df, use_container_width=True, hide_index=True)
-
-
-def _render_about(stats_raw):
-    """项目介绍页。"""
-    st.iframe(hero_html(stats_raw, height=300), height=310)
-
-    st.markdown("**技术架构**")
-    st.markdown(
-        """
-```
-高德开放平台 API  →  数据清洗/实体对齐  →  图谱增强  →  Neo4j(云)
-   6,949 个商家      连锁识别·重名消歧      商圈聚类·地理邻近      7,507 节点
-                         ↓                                         53,700 关系
-                  Streamlit + ECharts  ←  对话式问答(DeepSeek Text2Cypher)
-```
-"""
-    )
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.markdown("**数据与图谱**")
-        st.markdown(
-            f"""
-- 采集 **{stats_raw['poi']:,}** 个真实商家(高德 Web API)
-- **{stats_raw['relations']:,}** 条关系、**11** 种关系类型
-- **78** 个商圈(坐标聚类 + 地址地标命名)
-- **14,650** 条邻近关系(真实地理距离 < 300m)
-- **{stats_raw['brands']}** 个连锁品牌实体对齐
-"""
-        )
-    with col_b:
-        st.markdown("**问答与技术亮点**")
-        st.markdown(
-            """
-- **双引擎问答**:规则解析 + LLM Text2Cypher
-- **多轮对话**:理解「那评分高的呢」这类追问
-- **只读校验**:拦截 LLM 生成的写操作,保护数据
-- **错误自愈**:Cypher 执行失败自动回传重试
-- **流式输出**:打字机效果逐字返回
-- **限流保护**:防公网 API key 被刷
-"""
-        )
-
-    st.caption(
-        "数据来自高德开放平台 Web 服务 API(个人学习用途)· "
-        "地图边界来自 DataV.GeoAtlas · 图数据库为 Neo4j Aura · LLM 为 DeepSeek API"
-    )
 
 
 if __name__ == "__main__":
