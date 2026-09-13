@@ -4,22 +4,30 @@
   现在图谱只有粗品类(火锅店/中餐厅),用户问"哪里有羊杂"匹配不到。
   提取菜品后可以精确检索,这是"想吃什么"这类高频真实需求。
 
-数据来源:高德 POI 的 tag 字段(1776 家有,逗号分隔的菜品列表)
+数据来源:高德 POI 的 tag 字段(1776 家有,逗号分隔的菜品列表),
+         即 data/raw/poi.json —— 不依赖任何已有图数据库。
+
+用法:
+    python scripts/extract_dishes.py --dry-run      # 只统计,不写库
+    python scripts/extract_dishes.py                # 写入(目标库由 NEO4J_URI 决定)
+
+目标库跟随 src.config.neo4j_config():不设环境变量就是本地 WSL 库,
+设了 NEO4J_URI/NEO4J_USER/NEO4J_PASSWORD 就是线上 Aura。
+写入是幂等的(MERGE),可以反复执行。
 """
 import json
+import sys
 import warnings
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
-from neo4j import GraphDatabase
-
 BASE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE))
 RAW = BASE / "data" / "raw" / "poi.json"
 
-NEO4J_URI = "bolt://localhost:7687"
-NEO4J_AUTH = ("neo4j", "wlcb123456")
+from src.db import get_driver  # noqa: E402
 
 # 过滤规则:这些不是菜品,是其他标签
 NOT_DISH = {
@@ -88,9 +96,16 @@ def main():
         if d in valid_dishes:
             print(f"  {d}: {c} 家")
 
-    # ---- 写入 Neo4j ----
+    # ---- 写入图数据库 ----
     rows = [{"poi_id": pid, "dishes": ds} for pid, ds in filtered.items()]
-    driver = GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
+    print()
+    print(f"待写入: {len(rows)} 家商家 / {sum(len(r['dishes']) for r in rows)} 条关系")
+
+    if "--dry-run" in sys.argv:
+        print("(--dry-run:未写库)")
+        return
+
+    driver = get_driver()
     with driver.session() as s:
         s.run("CREATE CONSTRAINT dish_name IF NOT EXISTS FOR (d:Dish) REQUIRE d.name IS UNIQUE")
 
@@ -110,7 +125,6 @@ def main():
                 rows=rows[i:i + batch],
             ).single()
             total_rel += res["c"] if res else 0
-        print()
         print(f"已建立 招牌菜 关系: {total_rel}")
 
         # 统计
@@ -133,8 +147,6 @@ def main():
         print("=== 验证:卖羊杂的店 ===")
         for r in rows2:
             print(f"  {r['店名'][:26]:28s} {r['区县']} {r['评分']}分")
-
-    driver.close()
 
 
 if __name__ == "__main__":

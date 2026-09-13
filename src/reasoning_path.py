@@ -8,22 +8,14 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-from neo4j import GraphDatabase
-
-from src.config import neo4j_config
+from src.db import run_cypher
 
 MAX_PATHS = 3          # 最多展示几条示例路径
 MAX_STEPS = 5          # 单条路径最多几跳
 
 
 def _run(cypher: str, **params):
-    uri, auth = neo4j_config()
-    d = GraphDatabase.driver(uri, auth=auth)
-    try:
-        with d.session() as s:
-            return [dict(r) for r in s.run(cypher, **params)]
-    finally:
-        d.close()
+    return run_cypher(cypher, **params)
 
 
 def _key(rec: dict, kind: str):

@@ -9,18 +9,27 @@ from datetime import datetime
 
 warnings.filterwarnings("ignore")
 
-from neo4j import GraphDatabase
-
-from src.config import neo4j_config
+from src.db import get_driver
 
 SCHEMA = [
     "CREATE CONSTRAINT feedback_id IF NOT EXISTS FOR (f:Feedback) REQUIRE f.fid IS UNIQUE",
 ]
 
+_schema_ready = False
 
-def _driver():
-    uri, auth = neo4j_config()
-    return GraphDatabase.driver(uri, auth=auth)
+
+def _ensure_schema():
+    """建约束(只跑一次;约束本身幂等,但没必要每次写反馈都发一遍)。"""
+    global _schema_ready
+    if _schema_ready:
+        return
+    with get_driver().session() as s:
+        for c in SCHEMA:
+            try:
+                s.run(c)
+            except Exception:
+                pass
+    _schema_ready = True
 
 
 def save_feedback(fid: str, question: str, answer: str,
@@ -31,15 +40,9 @@ def save_feedback(fid: str, question: str, answer: str,
     comment: 用户填写的具体意见(点踩时收集)
     返回是否保存成功。
     """
-    uri, auth = neo4j_config()
-    d = GraphDatabase.driver(uri, auth=auth)
     try:
-        with d.session() as s:
-            for c in SCHEMA:
-                try:
-                    s.run(c)
-                except Exception:
-                    pass
+        with get_driver().session() as s:
+            _ensure_schema()
             s.run(
                 """
                 MERGE (f:Feedback {fid: $fid})
@@ -61,16 +64,12 @@ def save_feedback(fid: str, question: str, answer: str,
         return True
     except Exception:
         return False
-    finally:
-        d.close()
 
 
 def feedback_stats() -> dict:
     """统计反馈情况(可在管理页展示)。"""
-    uri, auth = neo4j_config()
-    d = GraphDatabase.driver(uri, auth=auth)
     try:
-        with d.session() as s:
+        with get_driver().session() as s:
             row = s.run(
                 """
                 MATCH (f:Feedback)
@@ -88,16 +87,12 @@ def feedback_stats() -> dict:
             }
     except Exception:
         return {"total": 0, "likes": 0, "dislikes": 0}
-    finally:
-        d.close()
 
 
 def load_dislikes(limit: int = 20) -> list:
     """读取最近的负面反馈(改进依据)。"""
-    uri, auth = neo4j_config()
-    d = GraphDatabase.driver(uri, auth=auth)
     try:
-        with d.session() as s:
+        with get_driver().session() as s:
             return [dict(r) for r in s.run(
                 """
                 MATCH (f:Feedback {rating: -1})
@@ -109,5 +104,3 @@ def load_dislikes(limit: int = 20) -> list:
             )]
     except Exception:
         return []
-    finally:
-        d.close()

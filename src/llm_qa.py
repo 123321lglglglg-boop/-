@@ -18,12 +18,9 @@ from pathlib import Path
 warnings.filterwarnings("ignore")
 
 import requests
-from neo4j import GraphDatabase
 
 BASE = Path(__file__).resolve().parent.parent
 KEY_FILE = BASE / "deepseek_key.txt"
-
-from src.config import neo4j_config
 
 API_URL = "https://api.deepseek.com/chat/completions"
 MODEL = "deepseek-chat"
@@ -246,14 +243,10 @@ def is_readonly(cypher: str) -> bool:
     return not FORBIDDEN.search(cypher)
 
 
-def run_cypher(cypher: str):
-    uri, auth = neo4j_config()
-    d = GraphDatabase.driver(uri, auth=auth)
-    try:
-        with d.session() as s:
-            return [dict(r) for r in s.run(cypher)]
-    finally:
-        d.close()
+def run_cypher(cypher: str, **params):
+    """执行查询(走 src/db.py 的全局连接池,不再每次新建 driver)。"""
+    from src.db import run_cypher as _run
+    return _run(cypher, **params)
 
 
 def text2cypher(question: str, max_retry: int = 2, history: list = None) -> tuple:

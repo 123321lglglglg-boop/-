@@ -3,23 +3,11 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-from neo4j import GraphDatabase
-
-from src.config import neo4j_config
-
-
-def _driver():
-    uri, auth = neo4j_config()
-    return GraphDatabase.driver(uri, auth=auth)
+from src.db import run_cypher
 
 
 def _run(query, **params):
-    d = _driver()
-    try:
-        with d.session() as s:
-            return [dict(r) for r in s.run(query, **params)]
-    finally:
-        d.close()
+    return run_cypher(query, **params)
 
 
 def overview_subgraph(district=None, limit_pois=40):

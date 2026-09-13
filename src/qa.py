@@ -18,9 +18,7 @@ from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
-from neo4j import GraphDatabase
-
-from src.config import neo4j_config
+from src.db import run_cypher
 
 # ---- 词典:把口语映射到图谱里的真实名称 ----
 
@@ -243,11 +241,7 @@ def answer(question: str) -> str:
     else:
         q, params = build_query(plan)
 
-    uri, auth = neo4j_config()
-    d = GraphDatabase.driver(uri, auth=auth)
-    with d.session() as s:
-        records = [dict(r) for r in s.run(q, **params)]
-    d.close()
+    records = run_cypher(q, **params)
     return render(plan, records)
 
 
