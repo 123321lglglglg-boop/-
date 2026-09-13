@@ -2,8 +2,13 @@
 amap_key.txt
 deepseek_key.txt
 aura_creds.txt
+siliconflow_key.txt
 .streamlit/secrets.toml
 .streamlit/secrets.toml.example
+# 服务器部署凭据(WLCB_HOST / WLCB_USER / WLCB_PASSWORD)
+deploy_creds.env
+*.pem
+*.key
 
 # IDE / 缓存
 .idea/

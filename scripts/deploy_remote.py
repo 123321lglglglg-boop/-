@@ -1,24 +1,71 @@
 """服务器部署辅助脚本:通过 paramiko 执行远程操作。
 
-用法: python scripts/deploy_remote.py <command>
+用法:
+    python scripts/deploy_remote.py <command>
+
+凭据从环境变量或本地文件读,**绝不写进源码**:
+
+    # 方式一:环境变量
+    export WLCB_HOST=1.2.3.4 WLCB_USER=root WLCB_PASSWORD=...
+
+    # 方式二:项目根目录的 deploy_creds.env(已在 .gitignore 中)
+    WLCB_HOST=1.2.3.4
+    WLCB_USER=root
+    WLCB_PASSWORD=...
+
+为什么改成这样:这个脚本原来把服务器 root 密码硬编码在第 15 行,
+而仓库是公开的——等于把服务器密码公开了。凭据一旦进过版本库,
+就算后续删掉,历史里还在,必须换密码而不是删代码。
 """
+import os
 import sys
 import time
 import warnings
+from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
 import paramiko
 
-HOST = "123.129.230.91"
-USER = "root"
-PASSWORD = "be2OavJZiy59"
+BASE = Path(__file__).resolve().parent.parent
+CRED_FILE = BASE / "deploy_creds.env"
+
+
+def load_creds() -> tuple:
+    """返回 (host, user, password)。环境变量优先,其次是 deploy_creds.env。"""
+    creds = {
+        "host": os.environ.get("WLCB_HOST", "").strip(),
+        "user": os.environ.get("WLCB_USER", "").strip(),
+        "password": os.environ.get("WLCB_PASSWORD", "").strip(),
+    }
+    if not all(creds.values()) and CRED_FILE.exists():
+        for line in CRED_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            key = k.strip().lower()
+            # 文件里写的是 WLCB_HOST 这种带前缀的键,映射到 host/user/password
+            if key.startswith("wlcb_"):
+                key = key[len("wlcb_"):]
+            if key in creds and not creds[key]:
+                creds[key] = v.strip()
+
+    missing = [k for k, v in creds.items() if not v]
+    if missing:
+        raise SystemExit(
+            "缺少部署凭据:" + ", ".join(missing) + "\n"
+            "请设置环境变量 WLCB_HOST / WLCB_USER / WLCB_PASSWORD,\n"
+            f"或写入 {CRED_FILE.name}（该文件已在 .gitignore 中,不会提交）。"
+        )
+    return creds["host"], creds["user"], creds["password"]
 
 
 def conn():
+    host, user, password = load_creds()
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(HOST, username=USER, password=PASSWORD, timeout=20)
+    ssh.connect(host, username=user, password=password, timeout=20)
     return ssh
 
 
