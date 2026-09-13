@@ -110,12 +110,6 @@ def session_client_id() -> str:
 
 def main():
     _warm_driver()
-    stats_raw = {
-        "poi": run_cypher("MATCH (p:POI) RETURN count(p) AS n")[0]["n"],
-        "relations": run_cypher("MATCH ()-[r]->() RETURN count(r) AS n")[0]["n"],
-        "brands": run_cypher("MATCH (c:Chain) RETURN count(c) AS n")[0]["n"],
-        "districts": run_cypher("MATCH (d:District) RETURN count(d) AS n")[0]["n"],
-    }
 
     # ---- 左上角汉堡菜单(替代顶部 tab 栏)----
     nav_col, _ = st.columns([1, 11])
