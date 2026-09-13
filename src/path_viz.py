@@ -1,4 +1,73 @@
-"""推理路径的可视化渲染:液态玻璃风格的竖向路径链。"""
+"""推理路径的可视化渲染。
+
+两种展示:
+  render_paths_html       —— 竖排链条式(轻量,可直接塞进 st.markdown)
+  render_paths_graph_html —— 真正的节点-边图(复用项目已有的 ECharts 基建,
+                             需要 st.iframe 才能跑 JS)
+
+文档《KG项目优化文档》第二部分 4 要的是后者:把「A →位于→ B →属于→ C」
+从文字链变成看得见的图。这里没有引入 streamlit-agraph 新依赖,
+而是复用 static/echarts.min.js —— 项目其他图谱视图都用它,风格统一。
+"""
+
+# 关系 → 目标节点的类型(用来决定节点颜色和形状)
+REL_TO_TYPE = {
+    "位于": "District",
+    "位于商圈": "BusinessArea",
+    "属于细类": "CategoryL3",
+    "属于品类": "CategoryL1",
+    "价位": "PriceLevel",
+    "评分档": "RatingTier",
+    "连锁品牌": "Chain",
+    "邻近": "POI",
+    "招牌菜": "Dish",
+}
+
+
+def render_paths_graph_html(paths: list, height: int = 380) -> str:
+    """把路径数据渲染成 ECharts 力导向图。
+
+    paths: [{"start": 起点名, "steps": [{"from","rel","to","note"}, ...]}, ...]
+    """
+    if not paths:
+        return ""
+    from src.viz import graph_html
+
+    nodes, edges = [], []
+    ntype = {}          # 节点名 → 类型(先到先得,起点优先 POI)
+
+    def add_node(name, kind="POI", size=20):
+        if not name:
+            return
+        if name not in ntype:
+            ntype[name] = kind
+            nodes.append({"id": name, "name": name, "type": kind,
+                          "value": size, "info": kind})
+        elif kind != "POI" and ntype[name] == "POI":
+            # 后面如果发现这个节点其实是"区县"之类的,升级类型(颜色更好看)
+            ntype[name] = kind
+            for n in nodes:
+                if n["id"] == name:
+                    n["type"] = kind
+                    break
+
+    for path in paths[:3]:
+        start = path.get("start")
+        if start:
+            add_node(start, "POI", 30)
+        for st in path.get("steps", []):
+            f, t, rel = st.get("from"), st.get("to"), st.get("rel") or ""
+            add_node(f, ntype.get(f, "POI"))
+            add_node(t, REL_TO_TYPE.get(rel, "POI"),
+                     26 if rel in ("位于", "位于商圈") else 16)
+            if f and t:
+                edges.append({"source": f, "target": t, "type": rel,
+                              "label": st.get("note") or rel})
+
+    if not nodes:
+        return ""
+    return graph_html(nodes, edges, height=height,
+                      title="推理路径(节点-关系图)")
 
 
 def render_paths_html(paths: list) -> str:

@@ -23,6 +23,7 @@ TYPE_STYLE = {
     "CategoryL1": ("#059669", 28, "roundRect"),
     "PriceLevel": ("#f97316", 22, "roundRect"),
     "RatingTier": ("#eab308", 20, "roundRect"),
+    "Dish":       ("#fb7185", 18, "circle"),
 }
 
 EDGE_LABEL = {

@@ -24,6 +24,14 @@ EMBED_MODEL = "BAAI/bge-m3"
 
 _cache = {"mat": None, "meta": None}
 
+# ---- L2 查询向量缓存(文档第一部分 1.2)----
+# 同一个查询文本不再重复调 embedding API。用普通字典 + TTL 而不是
+# @st.cache_data:这个模块也被 scripts/ 下的离线脚本 import,
+# 那些场景没有 Streamlit runtime,普通字典在哪都能用。
+_EMBED_CACHE = {}
+_EMBED_TTL = 86400
+_EMBED_MAX = 1000
+
 
 def get_key() -> str:
     key = os.environ.get("SILICONFLOW_API_KEY", "").strip()
@@ -78,16 +86,34 @@ def embed_query(text: str, timeout: int = 20) -> list:
         return []
 
 
+def cached_embed_query(text: str) -> tuple:
+    """带缓存的查询编码:同一个文本第二次调用不再走网络。"""
+    import time
+    key = text or ""
+    hit = _EMBED_CACHE.get(key)
+    if hit and time.time() - hit[0] < _EMBED_TTL:
+        return hit[1]
+    vec = tuple(embed_query(key))
+    if vec:
+        if len(_EMBED_CACHE) >= _EMBED_MAX:
+            # 简单的全清策略:查询文本重复率不高,不值得做精细淘汰
+            _EMBED_CACHE.clear()
+        _EMBED_CACHE[key] = (time.time(), vec)
+    return vec
+
+
 def semantic_search(query: str, top_k: int = 10) -> list:
-    """语义检索:返回 [{poi_id, name, text, score, source}, …]。
+    """语义检索:返回 [{poi_id, name, text, score, source, meta}, …]。
 
     score 是余弦相似度(0~1,越高越相似)。
+    meta 是落盘时一起存的结构化字段(区县/品类/评分/人均),
+    结果表要拿它拼"说明"列,所以一并带出来。
     """
     mat, meta = load_index()
     if mat is None or not meta:
         return []
 
-    qv = embed_query(query)
+    qv = cached_embed_query(query)
     if not qv:
         return []
 
@@ -111,6 +137,7 @@ def semantic_search(query: str, top_k: int = 10) -> list:
             "text": m.get("text", ""),
             "score": float(scores[int(i)]),
             "source": "vector",
+            "meta": m.get("meta") or {},
         })
     return out
 

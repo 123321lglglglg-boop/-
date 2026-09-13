@@ -7,10 +7,11 @@
 """
 import re
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 
 warnings.filterwarnings("ignore")
 
-from src.vector_search import semantic_search
+from src.vector_search import index_ready, semantic_search
 
 # ---- 分流规则 ----
 
@@ -228,39 +229,169 @@ def rerank_with_llm(query: str, candidates: list, top_n: int = 5) -> list:
 
 # ---- 完整检索流程(方案 5.2)----
 
+def _vec_to_record(v: dict) -> dict:
+    """向量命中 → 结果表行。
+
+    列名与图谱 records 对齐,这样两路结果能拼进同一张表。
+    "说明"列按文档阶段一的要求拼成「品类 · 区域 · 人均 · 评分」,
+    而不是把整段检索文本塞进去——那段文本在表格里既长又难读。
+    """
+    m = v.get("meta") or {}
+    parts = []
+    if m.get("category"):
+        parts.append(str(m["category"]))
+    if m.get("district"):
+        parts.append(str(m["district"]))
+    if m.get("cost"):
+        parts.append(f"人均{m['cost']:.0f}元")
+    if m.get("rating"):
+        parts.append(f"{m['rating']}分")
+    return {
+        "名称": v.get("name", ""),
+        "说明": " · ".join(parts) if parts else (v.get("text") or "").replace("\n", " · ")[:80],
+        "来源": "向量",
+        "相似度": round(float(v.get("score", 0.0)), 3),
+    }
+
+
+def _merge_kg_vec(kg_records: list, vec_results: list,
+                  kg_top: int = 8, vec_top: int = 5) -> list:
+    """混合路由的结果合并:图谱优先,向量补位,按店名去重。
+
+    排序依据说明:图谱结果保持 LLM 生成的 Cypher 里指定的 ORDER BY
+    (通常是评分/人均),向量补位的结果按余弦相似度排在后面。
+    这里不做 RRF 融合——RRF 需要两路都有可比排名,而图谱那路通常只有
+    十几条且已被 ORDER BY 定序,融合反而会把高分店挤下去。
+    """
+    seen, merged = set(), []
+    for r in kg_records[:kg_top]:
+        name = r.get("名称") or r.get("name")
+        if name and name not in seen:
+            seen.add(name)
+            merged.append(r)
+    for v in vec_results[:vec_top]:
+        if v.get("name") not in seen:
+            seen.add(v["name"])
+            merged.append(_vec_to_record(v))
+    return merged
+
+
+def plan(query: str, history: list = None) -> tuple:
+    """分流 + 检索语句构造。纯计算,不触网,不查库。
+
+    单独抽出来是为了让缓存层能在"跑任何网络请求之前"就拿到
+    (route, search_query, is_followup) 这三样东西:
+    路由要进缓存 key,search_query 要拿去算 embedding 查语义缓存。
+    """
+    route = classify_with_context(query, history)
+    fq = is_followup(query)
+
+    # 追问时把上一轮问题拼进检索语句,让向量检索也能理解"那些店"指什么
+    search_query = query
+    if fq and history:
+        for h in reversed(history):
+            if h.get("q"):
+                search_query = f"{h['q']} {query}"
+                break
+    return route, search_query, fq
+
+
+def retrieve(query: str, kg_fn, history: list = None, top_k: int = 10) -> dict:
+    """GraphRAG 核心检索:分流 → 图谱/向量 → 合并。
+
+    这是纯函数:不 import streamlit,不写 session_state,不渲染任何东西。
+    这么拆有三个目的:
+      1. 可被评测脚本直接调用(README 里的三方案对比用的是同一条代码路径,
+         而不是另写一份会和线上漂移的实现)
+      2. 返回的 dict 可 pickle,能被缓存
+      3. UI 渲染留在调用方,流式和缓存才能共存
+
+    kg_fn: (query, history) -> (cypher, records, err),由调用方注入
+           (chat_page 传 text2cypher;评测脚本可以传别的实现)
+
+    返回 {"route","cypher","records","err","kg_count","vec_count",
+          "search_query","is_followup","vector_used"}
+    """
+    route, search_query, fq = plan(query, history)
+
+    # ---- 两路检索 ----
+    want_vec = route in ("semantic", "hybrid") and index_ready()
+    want_kg = route != "semantic"
+
+    def _do_vec():
+        try:
+            return semantic_search(search_query, top_k=top_k) or []
+        except Exception:
+            return []
+
+    def _do_kg():
+        # 注意:semantic 路由下不跑 Text2Cypher——省掉一次 LLM 往返(约 1-2 秒)。
+        # 改之前是无条件跑,算完再丢掉,是白花的一次调用。
+        try:
+            return kg_fn(query, history)
+        except Exception as e:
+            return "", [], str(e)[:300]
+
+    vec_results = []
+    cypher, records, err = "", [], None
+
+    if want_vec and want_kg:
+        # 混合路由:图谱和向量互不依赖,并行跑。
+        # 两路都是等 I/O(Neo4j Aura 往返 + SiliconFlow embedding 往返),
+        # 所以用线程池而不是 asyncio —— 现有代码全是同步 HTTP 调用,
+        # 改成 async 要重写整条链路,收益一样但风险大得多。
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            fut_vec = ex.submit(_do_vec)
+            fut_kg = ex.submit(_do_kg)
+            vec_results = fut_vec.result()
+            cypher, records, err = fut_kg.result()
+    elif want_vec:
+        vec_results = _do_vec()
+    elif want_kg:
+        cypher, records, err = _do_kg()
+
+    if err and not vec_results:
+        return {
+            "route": route, "cypher": cypher, "records": [], "err": err,
+            "kg_count": 0, "vec_count": len(vec_results),
+            "search_query": search_query, "is_followup": fq,
+            "vector_used": False,
+        }
+
+    kg_count = len(records or [])
+
+    # ---- 合并 ----
+    if route == "semantic" and vec_results:
+        records = [_vec_to_record(v) for v in vec_results[:8]]
+    elif route == "hybrid" and vec_results and records:
+        records = _merge_kg_vec(records, vec_results)
+
+    return {
+        "route": route,
+        "cypher": cypher,
+        "records": records or [],
+        "err": None,
+        "kg_count": kg_count,
+        "vec_count": len(vec_results),
+        "search_query": search_query,
+        "is_followup": fq,
+        "vector_used": bool(vec_results),
+    }
+
+
 def hybrid_retrieve(query: str, kg_search_fn, top_k: int = 10) -> dict:
-    """按分流结果执行检索。
+    """按分流结果执行检索(保留旧接口,内部走 retrieve)。
 
     kg_search_fn: 调用方传入的图谱检索函数 (query) -> list[dict]
     返回 {"route", "candidates", "kg_count", "vec_count"}
     """
-    route = classify(query)
+    def _kg_fn(q, history):
+        return "", (kg_search_fn(q) or []), None
 
-    kg_results, vec_results = [], []
-
-    if route in ("structured", "hybrid"):
-        try:
-            kg_results = kg_search_fn(query) or []
-        except Exception:
-            kg_results = []
-
-    if route in ("semantic", "hybrid"):
-        try:
-            vec_results = semantic_search(query, top_k=top_k) or []
-        except Exception:
-            vec_results = []
-
-    if route == "structured":
-        candidates = kg_results
-    elif route == "semantic":
-        candidates = rerank_with_llm(query, vec_results, top_n=5)
-    else:
-        merged = rrf_fuse(kg_results, vec_results)
-        candidates = rerank_with_llm(query, merged, top_n=5)
-
+    res = retrieve(query, _kg_fn, top_k=top_k)
     return {
-        "route": route,
-        "candidates": candidates,
-        "kg_count": len(kg_results),
-        "vec_count": len(vec_results),
+        "route": res["route"],
+        "candidates": res["records"],
+        "kg_count": res["kg_count"],
+        "vec_count": res["vec_count"],
     }
