@@ -9,6 +9,13 @@ font = "sans serif"
 [server]
 headless = true
 enableStaticServing = true
+# 站点跑在 Caddy 反向代理后面(域名:8443 → localhost:8501)。
+# Streamlit 的 XSRF 校验会比较 Origin 和 Host,反代场景下 TLS 在 Caddy 终止,
+# Streamlit 看到的是 http 回源,校验不通过 —— WebSocket 直接返回 403,
+# 表现为页面能打开但一直转圈、发不出消息。
+# Caddy 是唯一入口且同源,这里关掉校验。
+enableCORS = false
+enableXsrfProtection = false
 
 [browser]
 gatherUsageStats = false
