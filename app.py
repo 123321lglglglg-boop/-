@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from neo4j import GraphDatabase
 
 from src.qa import answer, parse
 from src.llm_qa import ask
@@ -22,7 +21,9 @@ from src.theme import inject_liquid_theme
 from src.pwa import inject_pwa, inject_mobile_css
 from src.hero import hero_html
 from src.map_viz import drilldown_map_html
-from src.config import neo4j_config
+from src.metrics_page import render_metrics_page
+from src.changelog import render_changelog
+from src.db import get_driver, run_cypher
 import altair as alt
 
 BASE = Path(__file__).resolve().parent
@@ -31,6 +32,7 @@ st.set_page_config(page_title="乌兰察布知识图谱", page_icon="🗺️", l
 inject_liquid_theme()
 inject_pwa()
 inject_mobile_css()
+render_changelog()
 
 GRADIENT = ["#38bdf8", "#818cf8", "#a855f7", "#f472b6"]
 
@@ -61,14 +63,9 @@ def _gradient_bar(rows, cat_field, val_field, title, horizontal=False):
 
 
 @st.cache_resource
-def get_driver():
-    uri, auth = neo4j_config()
-    return GraphDatabase.driver(uri, auth=auth)
-
-
-def run_cypher(query: str, **params):
-    with get_driver().session() as s:
-        return [dict(r) for r in s.run(query, **params)]
+def _warm_driver():
+    """预热连接池:首个查询不必再等一次 TLS 握手。"""
+    return get_driver()
 
 
 def poi_search(districts, cats, rating_min, cost_max, keyword, limit):
@@ -112,6 +109,7 @@ def session_client_id() -> str:
 
 
 def main():
+    _warm_driver()
     stats_raw = {
         "poi": run_cypher("MATCH (p:POI) RETURN count(p) AS n")[0]["n"],
         "relations": run_cypher("MATCH ()-[r]->() RETURN count(r) AS n")[0]["n"],
@@ -123,7 +121,7 @@ def main():
     nav_col, _ = st.columns([1, 11])
     with nav_col:
         with st.popover("☰"):
-            options = ["💬 对话", "🗺️ 地图分布", "🕸️ 图谱探索", "🔍 商家查询"]
+            options = ["💬 对话", "🗺️ 地图分布", "🕸️ 图谱探索", "🔍 商家查询", "📊 指标看板"]
             choice = st.radio("功能", options, key="nav",
                               label_visibility="collapsed", index=None)
 
@@ -159,6 +157,9 @@ def main():
 
     elif page == "🔍 商家查询":
         _render_merchant_search()
+
+    elif page == "📊 指标看板":
+        render_metrics_page()
 
     if page != "💬 对话":
         st.divider()
